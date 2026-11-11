@@ -1,0 +1,8 @@
+{
+  // VS Code offers to install these when you open the project.
+  "recommendations": [
+    "ms-python.python",   // Python support: running, debugging, testing
+    "ms-python.vscode-pylance", // Fast code completion and type checking
+    "anthropic.claude-code"     // Claude Code inside VS Code
+  ]
+}

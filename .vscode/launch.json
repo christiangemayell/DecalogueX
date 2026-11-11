@@ -1,0 +1,23 @@
+{
+  // Debug configurations: press F5 in VS Code to run one.
+  // Set a breakpoint by clicking left of a line number, like in IntelliJ/Eclipse.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DecalogueX: scan demo (dry run)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "decaloguex",
+      "args": ["scan", "demo", "--dry-run"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "DecalogueX: scan demo (interactive)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "decaloguex",
+      "args": ["scan", "demo"],
+      "console": "integratedTerminal"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# Files Git should never track for the DecalogueX project itself.
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment (the project's private copy of Python + packages,
+# like a local Maven repository). Everyone recreates it on their own machine.
+.venv/
+
+# Python's compiled bytecode cache (like Java .class files)
+__pycache__/
+*.pyc
+
+# Packaging and build output (Nuitka binaries will land in build/ and dist/)
+*.egg-info/
+build/
+dist/
+
+# Test runner cache
+.pytest_cache/
+
+# Throwaway demo app made by scripts/make_demo.py
+demo/
+
+# A hidden settings file Windows creates in folders. Not part of the project.
+desktop.ini

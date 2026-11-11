@@ -1,0 +1,43 @@
+# pyproject.toml: the project's build file.
+#
+# JAVA COMPARISON: this is Python's version of a Maven pom.xml or a Gradle
+# build file. It names the project, lists its dependencies, and says which
+# function runs when someone types the `decaloguex` command.
+
+[build-system]
+# The tool that turns this folder into an installable package (like the
+# Maven compiler plugin). pip downloads it automatically when needed.
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decaloguex"
+version = "0.1.0"
+description = "Crash Doctor: finds and fixes the crash and security bugs AI coding tools leave behind."
+requires-python = ">=3.10"
+# Runtime dependencies (Maven's <dependencies>). Tree-sitter is the parser
+# that reads JavaScript, TypeScript and Python source code into a tree.
+dependencies = [
+    "tree-sitter>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-python>=0.23",
+]
+
+[project.optional-dependencies]
+# Extra packages only needed while developing (like Maven's <scope>test</scope>).
+# Install with:  pip install -e ".[dev]"
+dev = ["pytest>=8"]
+
+[project.scripts]
+# Creates a `decaloguex` command that calls main() in decaloguex/cli.py.
+# Similar to setting Main-Class in a JAR manifest.
+decaloguex = "decaloguex.cli:main"
+
+[tool.setuptools.packages.find]
+# Only ship the decaloguex package, not the tests.
+include = ["decaloguex*"]
+
+[tool.pytest.ini_options]
+# Where pytest (Python's JUnit) looks for tests.
+testpaths = ["tests"]

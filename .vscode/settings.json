@@ -1,0 +1,23 @@
+{
+  // Use the project's own Python (the .venv folder) for running,
+  // debugging, and code completion.
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+
+  // Turn on the Testing panel (the flask icon) using pytest.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+
+  // Python's standard style is 4-space indents, lines up to ~100 chars.
+  "[python]": {
+    "editor.tabSize": 4,
+    "editor.rulers": [100]
+  },
+
+  // Hide cache folders from the file explorer.
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/*.egg-info": true
+  }
+}
