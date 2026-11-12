@@ -1,0 +1,12 @@
+{
+  "name": "decaloguex",
+  "version": "0.2.0",
+  "description": "Crash Doctor: finds and fixes the security and crash bugs AI coding tools leave behind.",
+  "author": {
+    "name": "christiangemayell"
+  },
+  "homepage": "https://github.com/christiangemayell/decaloguex",
+  "repository": "https://github.com/christiangemayell/decaloguex",
+  "license": "MIT",
+  "keywords": ["security", "secrets", "sql-injection", "vibe-coding"]
+}

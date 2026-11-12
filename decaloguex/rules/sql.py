@@ -31,6 +31,10 @@ WHEN THERE'S NO AUTOMATIC FIX (a "manual step" is shown instead)
       Placeholders only hold VALUES, so the name must be checked against a
       fixed list of allowed names. That needs a human.
     * The value is only PART of a quoted string ('%${search}%').
+    * The value goes after LIMIT or OFFSET. Those need a whole number, and
+      some databases refuse the text that web forms send.
+    * The "value" is really a piece of SQL chosen by the code
+      (${id ? "..." : "NULL"}).
     * We can't tell which database library is used, so we don't know which
       placeholder to write (? or $1 or %s).
 
@@ -79,7 +83,8 @@ def check(file: SourceFile, info: ProjectInfo) -> list[Finding]:
     """Scan one file for SQL built from variables. Returns findings; writes nothing."""
     drivers = drivers_in_use(file, info)
     findings = []
-    for node in walk(file.root):
+    builders = PY_BUILDERS if file.is_python else JS_BUILDERS
+    for node in file.nodes_of(*builders):       # only the nodes that can build a string
         built = sql_string(node, file)          # steps 1 and 2a
         if built is None:
             continue
@@ -335,6 +340,9 @@ def split_python_string(node: Node, file: SourceFile) -> Built | None:
     return Built(node, parts, problem)
 
 
+# Variable names that usually hold several values at once, not one.
+BUNDLE_NAMES = {"params", "parameters", "args", "values", "vals", "data", "row", "record", "items"}
+
 # %s, %d, %i and %f are positional. %(name)s is named, which we don't rewrite.
 PERCENT_SPEC = re.compile(r"%%|%\([^)]*\)[a-z]|%[sdif]|%.?")
 
@@ -352,6 +360,11 @@ def split_percent_format(node: Node, template: Node, values: Node, file: SourceF
     position = 0
     used = 0
     problem = ""
+    if values.type == "identifier" and text(values).lower() in BUNDLE_NAMES:
+        # "... %s" % params  hands over a ready-made tuple of values. Passing
+        # it on as (params,) would send the whole tuple as ONE value.
+        problem = (f"`{text(values)}` looks like a ready-made group of values. Pass it straight to "
+                   "the query call and use placeholders in the SQL, by hand.")
     for match in PERCENT_SPEC.finditer(raw):
         spec = match.group(0)
         if spec == "%%":
@@ -361,7 +374,7 @@ def split_percent_format(node: Node, template: Node, values: Node, file: SourceF
             parts.append(Part(expr=value_nodes[used]))
             used += 1
         else:
-            problem = "The query uses named or unusual % placeholders. Rewrite it by hand."
+            problem = problem or "The query uses named or unusual % placeholders. Rewrite it by hand."
             parts.append(Part(expr=values))
         position = match.end()
     parts.append(Part(text=raw[position:].replace("%%", "%")))
@@ -457,7 +470,7 @@ def sql_string(node: Node, file: SourceFile) -> Built | None:
     if node.type not in builders:
         return None  # quick exit: most nodes can't build a string at all
     parent = node.parent
-    if parent is not None and split(parent, file) is not None:
+    if inside_bigger_string(node, file):
         return None  # the parent is a bigger piece of the same string
     if node.type == "template_string" and parent is not None and parent.type == "call_expression":
         return None  # a TAGGED template, sql`...${id}`, is the SAFE way to write SQL
@@ -465,6 +478,27 @@ def sql_string(node: Node, file: SourceFile) -> Built | None:
     if built is None or not built.has_variables() or not looks_like_sql(built.preview_sql()):
         return None
     return built
+
+
+def inside_bigger_string(node: Node, file: SourceFile) -> bool:
+    """Is `node` one piece of a larger string-building expression?
+
+    This only LOOKS at the parent; it doesn't split it. Splitting the
+    parent here, once for each of its pieces, made a string written in
+    2,000 pieces take 2,000 x 2,000 steps. One such file could stall a scan.
+    """
+    parent = node.parent
+    if parent is None:
+        return False
+    if parent.type == "concatenated_string":            # Python: "abc" "def"
+        return True
+    if parent.type in ("binary_expression", "binary_operator"):
+        operator = text(field(parent, "operator"))
+        if operator == "+":                              # "abc" + x
+            return True
+        left = field(parent, "left")
+        return operator == "%" and file.is_python and left is not None and left.type == "string"  # "..." % x
+    return False
 
 
 def query_call(arg: Node, file: SourceFile) -> Node | None:
@@ -485,9 +519,13 @@ def query_call(arg: Node, file: SourceFile) -> Node | None:
 # ===========================================================================
 
 # A placeholder is only allowed where SQL expects a VALUE: right after
-# =, <, >, LIKE, LIMIT, OFFSET or BETWEEN. Anywhere else (FROM ${table},
-# ORDER BY ${column}) the variable is a NAME, and placeholders can't hold names.
-VALUE_BEFORE = re.compile(r"(?:[=<>]|\bLIKE|\bILIKE|\bLIMIT|\bOFFSET|\bBETWEEN)$", re.IGNORECASE)
+# =, <, >, LIKE or BETWEEN. Anywhere else (FROM ${table}, ORDER BY ${column})
+# the variable is a NAME, and placeholders can't hold names.
+VALUE_BEFORE = re.compile(r"(?:[=<>]|\bLIKE|\bILIKE|\bBETWEEN)$", re.IGNORECASE)
+# LIMIT and OFFSET take a value too, but it must be a whole NUMBER. Values
+# from a web form arrive as text, and MySQL rejects LIMIT '10'. A query that
+# works today could start failing, so these are left to a human.
+NEEDS_NUMBER = re.compile(r"\b(?:LIMIT|OFFSET)$", re.IGNORECASE)
 BETWEEN_AND = re.compile(r"\bBETWEEN\s+(?:\?|\$\d+|%s)\s+AND$", re.IGNORECASE)   # BETWEEN ? AND <here>
 VALUES_LIST = re.compile(r"\bVALUES\s*\((?:[^()]*,)?$", re.IGNORECASE)           # VALUES (?, <here>
 
@@ -546,6 +584,13 @@ def parameterize(parts: list[Part], style: str) -> tuple[str, list[Node]]:
         # SQL string, as in  LIKE '%${q}%'. (% here is remainder, like Java's %.)
         if sql.count("'") % 2 == 1:
             raise CannotFix(QUOTED_PART)
+        if NEEDS_NUMBER.search(sql.rstrip()):
+            raise CannotFix("LIMIT and OFFSET need a whole number, but values from a web form arrive as "
+                            "text. Turn the value into a number first (parseInt in JavaScript, int() in "
+                            "Python), then use a placeholder.")
+        if builds_sql_text(part.expr):
+            raise CannotFix("This value is really a piece of SQL chosen by the code, not a plain value. "
+                            "Rewrite the query with placeholders by hand.")
         if not is_value_position(sql):
             raise CannotFix("A table or column name comes from a variable. Placeholders can't hold names, "
                             "so check the name against a fixed list of allowed names.")
@@ -558,6 +603,27 @@ def parameterize(parts: list[Part], style: str) -> tuple[str, list[Node]]:
         else:
             sql += style              # ? or %s
     return sql, values
+
+
+def builds_sql_text(expr: Node | str | None) -> bool:
+    """Does this "value" choose between pieces of SQL text?
+
+        WHERE owner = ${id ? `'${id}'` : "NULL"}
+
+    The ${...} doesn't hold a value. It holds SQL: either 'abc' with its
+    own quotes, or the word NULL. Sent as a placeholder, the database
+    would compare against the literal text "NULL" instead.
+
+    The giveaway is a choice (a ? b : c, or Python's b if a else c) with a
+    string inside it.
+    """
+    if expr is None or isinstance(expr, str):
+        return False
+    for node in walk(expr):
+        is_choice = "ternary" in node.type or "conditional" in node.type
+        if is_choice and any("string" in inner.type for inner in walk(node)):
+            return True
+    return False
 
 
 def js_literal(value: str) -> str:

@@ -35,6 +35,7 @@ import sys
 import textwrap  # wraps long sentences onto several lines
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from decaloguex import __version__, scenes
@@ -214,7 +215,8 @@ def show_start(screen: Screen) -> None:
     """The title, then the scanners powering up one by one."""
     screen.cursor(False)
     screen.say()
-    screen.type_out("  ◆ DECALOGUEX  ·  CRASH DOCTOR", CYAN)
+    # ✦ echoes the logo: a glowing ice-blue star.
+    screen.type_out("  ✦ DECALOGUEX  ·  CRASH DOCTOR", CYAN)
     screen.say(screen.dim(f"    v{__version__}  ·  finds and fixes the mistakes AI coding tools leave behind"))
     screen.say()
 
@@ -534,11 +536,190 @@ def show_summary(screen: Screen, total: int, applied: list[Finding], rejected: l
             screen.say(("  " + screen.amber("⚠ ") if number == 0 else "    ") + text)
 
     screen.say()
-    if fixed == total:
-        screen.say(screen.mint("  ✔ All done. Your code is in great shape!", bold=True))
-    elif manual:
-        screen.say(screen.bold("  Next step: ") + "do the jobs marked ✋ above, then scan again.")
-    else:
-        screen.say(screen.dim("  Run the scan again any time to fix the rest."))
+    if fixed < total:
+        # No stamp while problems are left: approving unfinished code would be dishonest.
+        left = total - fixed
+        screen.say(screen.coral(f"  ◌ Not approved yet: {left} problem{'' if left == 1 else 's'} left.", bold=True))
+        if manual:
+            screen.say(screen.bold("  Next step: ") + "do the jobs marked ✋ above, then scan again.")
+        else:
+            screen.say(screen.dim("  Run the scan again any time to fix the rest."))
+    # (When everything is fixed, cli.py ends with show_stamp() instead.)
+    if fixed:
+        screen.say(screen.dim("  Changed your mind? ") + screen.cyan("decaloguex undo") +
+                   screen.dim(" puts everything back."))
     screen.say()
     screen.cursor(True)
+
+
+# ===========================================================================
+# BLIND SPOTS, UNDO AND TELEMETRY
+# ===========================================================================
+
+def show_blind_spots(screen: Screen, spots) -> None:
+    """Say plainly what DecalogueX could NOT check. Hiding it would be dishonest."""
+    not_checked = spots.files_not_checked()
+    if not not_checked:
+        return
+    show_section(screen, "BLIND SPOTS")
+    screen.say(f"  {screen.amber('◌')} I couldn't check {not_checked} file{'' if not_checked == 1 else 's'}:")
+    for language, count in spots.unsupported.most_common():
+        screen.say(f"      {count} {language} file{'' if count == 1 else 's'} " + screen.dim("(I can't read this language yet)"))
+    if spots.too_big:
+        screen.say(f"      {len(spots.too_big)} very large file{'' if len(spots.too_big) == 1 else 's'} " +
+                   screen.dim("(usually generated code)"))
+    tripped_files = {t["path"] for t in spots.tripped}
+    for path in sorted(tripped_files):
+        screen.say(f"      {path} " + screen.dim("(something in it confused me)"))
+    screen.say(screen.dim("    The full list is saved in .decaloguex/blind-spots.json"))
+
+
+# ===========================================================================
+# THE APPROVAL STAMP (the big finish)
+# ===========================================================================
+#
+# Shown ONLY when the code is clean: nothing was found, or everything found
+# got fixed. The stamp slams down, shakes, flashes, and a thumbs-up appears:
+#
+#          _          ╔════════════════════════════════════════╗
+#         /(|         ║                                        ║
+#        (  :         ║    DECALOGUEX VERIFICATION COMPLETE    ║
+#       __\  \  _____ ║                                        ║
+#     (____)  `|      ║         ✦  A P P R O V E D  ✦          ║
+#    (____)|   |      ║                                        ║
+#     (____).__|      ║      12 Nov 2026 · 7 files checked     ║
+#      (___)__.|_____ ╚════════════════════════════════════════╝
+#
+# No emoji on purpose: terminals draw emoji at different widths, which can
+# push the stamp's right-hand edge out of line.
+
+# r"..." keeps the backslashes in the drawing exactly as typed.
+_THUMB_ART = [
+    r"      _",
+    r"     /(|",
+    r"    (  :",
+    r"   __\  \  _____",
+    r" (____)  `|",
+    r"(____)|   |",
+    r" (____).__|",
+    r"  (___)__.|_____",
+]
+# Pad every line to the same width, so the stamp beside it lines up.
+THUMB = [line.ljust(max(len(row) for row in _THUMB_ART)) for line in _THUMB_ART]
+STAMP_INSIDE = 40  # how many characters fit between the stamp's borders
+
+
+def stamp_lines(files_checked: int, not_checked: int) -> list[str]:
+    """The stamp, as 8 plain lines of text (the border and what's inside)."""
+    date = datetime.now().strftime("%d %b %Y")  # e.g. "12 Nov 2026"
+    checked = f"{date} · {files_checked} file{'' if files_checked == 1 else 's'} checked"
+    inside = [
+        "",
+        "DECALOGUEX VERIFICATION COMPLETE",
+        "",
+        "✦  A P P R O V E D  ✦",
+        "",
+        checked,
+    ]
+    lines = ["╔" + "═" * STAMP_INSIDE + "╗"]
+    lines += ["║" + text.center(STAMP_INSIDE) + "║" for text in inside]  # .center() pads both sides
+    lines.append("╚" + "═" * STAMP_INSIDE + "╝")
+    return lines
+
+
+def show_stamp(screen: Screen, files_checked: int, not_checked: int = 0) -> None:
+    """The big finish: an approval stamp and a thumbs-up.
+
+    The animation, frame by frame (each frame redraws the whole picture,
+    like the fantasy scenes do):
+      1. the stamp hovers, faint, as if about to come down
+      2. THUMP: it lands, one space off, as if it hit hard
+      3. it settles, and the thumbs-up appears beside it
+      4. it flashes a few times, then stays bright green
+    """
+    stamp = stamp_lines(files_checked, not_checked)
+    with_thumb = screen.width >= len(THUMB[0]) + len(stamp[0]) + 6  # room for both side by side?
+
+    def picture(shift: int, paint, thumb_visible: bool) -> list[str]:
+        rows = []
+        for thumb, stamp_row in zip(THUMB, stamp):  # zip pairs up the two lists line by line
+            left = (screen.amber(thumb, bold=True) if thumb_visible else " " * len(thumb)) + "  " if with_thumb else ""
+            rows.append("  " + " " * shift + left + paint(stamp_row))
+        return rows
+
+    def bright(text: str) -> str:
+        return screen.mint(text, bold=True)
+
+    def glow(text: str) -> str:
+        return screen.cyan(text, bold=True)
+
+    # (shift, colour, thumbs-up showing?, seconds on screen)
+    frames = [
+        (0, screen.dim, False, 0.25),
+        (1, bright, False, 0.07),   # THUMP
+        (0, bright, True, 0.18),
+        (0, glow, True, 0.12),
+        (0, bright, True, 0.12),
+        (0, glow, True, 0.12),
+        (0, bright, True, 0.0),
+    ]
+    screen.say()
+    if not screen.animate:
+        for row in picture(0, bright, True):
+            screen.say(row)
+    else:
+        screen.cursor(False)
+        for number, (shift, paint, thumb_visible, seconds) in enumerate(frames):
+            if number > 0:
+                sys.stdout.write(f"\x1b[{len(stamp)}A")  # back up to the top of the picture
+            for row in picture(shift, paint, thumb_visible):
+                sys.stdout.write("\r\x1b[2K" + row + "\n")
+            sys.stdout.flush()
+            time.sleep(seconds)
+        screen.cursor(True)
+
+    screen.say()
+    screen.say(screen.mint("  ✔ Your code passed every check. Nice work!", bold=True))
+    if not_checked:
+        # Honest small print: the stamp only covers what could be checked.
+        screen.say(screen.dim(f"    ({not_checked} file{'' if not_checked == 1 else 's'} couldn't be checked; "
+                              "see BLIND SPOTS above.)"))
+    screen.say()
+
+
+def show_notice(screen: Screen, notice: str) -> None:
+    """The one-time telemetry notice: two dim lines, shown once, ever."""
+    for number, line in enumerate(notice.splitlines()):
+        screen.say(screen.dim(("  ℹ " if number == 0 else "    ") + line))
+    screen.say()
+
+
+def show_undo_warning(screen: Screen, edited: list[str]) -> None:
+    screen.say()
+    screen.say(screen.amber("  ⚠ You've changed these files since the fix:"))
+    for path in edited:
+        screen.say(f"      {path}")
+    screen.say(screen.dim("    Undoing will throw those changes away."))
+
+
+def show_undo_done(screen: Screen, restored: list[str], when: str) -> None:
+    screen.say()
+    screen.say(screen.mint(f"  ↶ Undone. Put back {len(restored)} file{'' if len(restored) == 1 else 's'} "
+                           f"exactly as they were before the fix ({when.replace('T', ' ')}):", bold=True))
+    for path in restored:
+        screen.say(f"      {screen.mint('✔')} {path}")
+    screen.say()
+
+
+def show_telemetry_status(screen: Screen, enabled: bool, sending: bool) -> None:
+    screen.say()
+    if not enabled:
+        screen.say(f"  Usage stats are {screen.coral('OFF', bold=True)}. Nothing is sent.")
+        screen.say(screen.dim("  Turn back on with: decaloguex telemetry on"))
+    else:
+        screen.say(f"  Usage stats are {screen.mint('ON', bold=True)}.")
+        if not sending:
+            screen.say(screen.dim("  (No stats destination is set up in this copy, so nothing is actually sent.)"))
+        screen.say(screen.dim("  Only anonymous counts are sent: never your code, file names or secrets."))
+        screen.say(screen.dim("  Turn off with: decaloguex telemetry off"))
+    screen.say()

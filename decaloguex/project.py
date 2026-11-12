@@ -85,6 +85,13 @@ class ProjectInfo:
     js_dependencies: dict[str, str] = field(default_factory=dict)
     # requirements.txt / pyproject.toml: normalized names, e.g. {"psycopg2-binary"}
     py_dependencies: set[str] = field(default_factory=set)
+    # go.mod: module paths, e.g. {"github.com/lib/pq"}
+    go_modules: set[str] = field(default_factory=set)
+    # package.json: the text of the "scripts" section, e.g. 'node --env-file=.env server.js'
+    js_scripts: str = ""
+    # The language families whose apps load a .env file when they start.
+    # See "Does the app load its .env file?" at the bottom of this file.
+    env_loaders: set[str] = field(default_factory=set)
 
 
 def normalize_py_name(name: str) -> str:
@@ -110,6 +117,7 @@ def read_project_info(root: Path) -> ProjectInfo:
             # .get(key, {}) returns {} if the section is missing.
             for name, version in data.get(section, {}).items():
                 info.js_dependencies[name] = str(version)
+        info.js_scripts = " ".join(str(command) for command in data.get("scripts", {}).values())
     except (OSError, ValueError, AttributeError):
         pass  # no package.json, or it isn't valid JSON
 
@@ -137,4 +145,129 @@ def read_project_info(root: Path) -> ProjectInfo:
     except (ImportError, OSError, ValueError, AttributeError):
         pass
 
+    # --- Go: go.mod -----------------------------------------------------------
+    try:
+        go_mod = (root / "go.mod").read_text(encoding="utf-8", errors="replace")
+        # Lines like  "github.com/lib/pq v1.10.9"  inside require ( ... ).
+        info.go_modules = set(re.findall(r"^\s*(?:require\s+)?([\w.\-]+\.[\w]+/[\w.\-/]+)\s+v", go_mod, re.MULTILINE))
+    except OSError:
+        pass
+
+    info.env_loaders = env_loaders_from_project_files(root, info)
     return info
+
+
+# ---------------------------------------------------------------------------
+# Does the app load its .env file?
+# ---------------------------------------------------------------------------
+#
+# The secret rules move passwords and keys out of the code and into a file
+# called .env. But a .env file does nothing by itself: the app has to READ
+# it when it starts. Plain Node.js, Python, PHP, Java and the rest don't.
+# They need a small library (usually called "dotenv"), or a framework that
+# does it for them, like Next.js.
+#
+# If nothing loads .env, the moved secret comes back EMPTY and the app
+# breaks (payments fail, logins fail). So before any secret is moved,
+# DecalogueX looks for proof that .env is loaded. No proof, no move: it
+# explains how to set up loading instead (ENV_LOADING_HELP below).
+
+_WHY = "This app doesn't load its .env file yet, so the value would come back empty and break things. "
+_THEN = " Then scan again and I'll move it for you."
+
+# Family -> what to tell the user when the app doesn't load .env.
+ENV_LOADING_HELP = {
+    "js": _WHY + 'Run `npm install dotenv` and add `require("dotenv").config();` as the first line '
+                 "of your main file." + _THEN,
+    "python": _WHY + "Run `pip install python-dotenv` and add `from dotenv import load_dotenv` and "
+                     "`load_dotenv()` at the top of your main file." + _THEN,
+    "php": _WHY + "Run `composer require vlucas/phpdotenv` and load it when the app starts with "
+                  "`Dotenv\\Dotenv::createUnsafeImmutable(__DIR__)->load();`." + _THEN,
+    "java": _WHY + "Add a .env loader such as dotenv-java, or set the value as a real environment "
+                   "variable where the app runs." + _THEN,
+    "kotlin": _WHY + "Add a .env loader such as dotenv-kotlin, or set the value as a real environment "
+                     "variable where the app runs." + _THEN,
+    "csharp": _WHY + "Add the DotNetEnv package and call `DotNetEnv.Env.Load();` when the app starts." + _THEN,
+    "go": _WHY + "Run `go get github.com/joho/godotenv` and call `godotenv.Load()` at the start of main()." + _THEN,
+    "ruby": _WHY + 'Add `gem "dotenv"` to your Gemfile and `require "dotenv/load"` when the app starts.' + _THEN,
+    "swift": _WHY + "Load .env when the app starts (Vapor does this for you; otherwise use a package "
+                    "such as SwiftDotenv)." + _THEN,
+}
+
+# Family -> a pattern that, found in a source file, proves .env gets loaded.
+_ENV_LOADING_CODE = {
+    "js": re.compile(rb"""require\(\s*['"]dotenv|from\s+['"]dotenv|import\s+['"]dotenv/config|process\.loadEnvFile"""),
+    "python": re.compile(rb"load_dotenv|dotenv_values|\.read_env\("),
+    "php": re.compile(rb"Dotenv::create|Dotenv\\Dotenv"),
+    "java": re.compile(rb"Dotenv\.(?:load|configure)"),
+    "kotlin": re.compile(rb"Dotenv\.(?:load|configure)|dotenv\s*\{|dotenv\(\)"),
+    "csharp": re.compile(rb"DotNetEnv|Env\.Load\("),
+    "go": re.compile(rb"godotenv\."),
+    "ruby": re.compile(rb"dotenv/load|Dotenv\.load"),
+    "swift": re.compile(rb"(?i)dotenv"),
+}
+
+# package.json scripts that load .env: Node's --env-file option, the dotenv
+# and env-cmd command-line tools, and Bun (which always loads .env).
+SCRIPT_LOADS_ENV = re.compile(r"--env-file|\bdotenv\b|\benv-cmd\b|\bbun\b")
+
+
+def source_loads_env(family: str, source: bytes) -> bool:
+    """Does this source file contain code that loads .env?"""
+    pattern = _ENV_LOADING_CODE.get(family)
+    return bool(pattern and pattern.search(source))
+
+
+def env_loaders_from_project_files(root: Path, info: ProjectInfo) -> set[str]:
+    """Which language families load .env, judging by the project's own files.
+
+    This looks at dependency lists (package.json, requirements.txt, ...).
+    The engine adds to it while scanning, when it sees loading code in a
+    source file (see source_loads_env above).
+
+    If your app gets its settings some other way (from Docker or your
+    hosting dashboard, say), set DECALOGUEX_ENV_LOADED=1 to tell
+    DecalogueX "trust me, the values will be there".
+    """
+    if os.environ.get("DECALOGUEX_ENV_LOADED", "").lower() in ("1", "true", "yes"):
+        return set(ENV_LOADING_HELP)  # every family
+
+    def mentions(file_names: list[str], pattern: str) -> bool:
+        """True if any of these files (in the project folder) contains the pattern."""
+        for name in file_names:
+            for path in root.glob(name):
+                try:
+                    if re.search(pattern, path.read_text(encoding="utf-8", errors="replace")):
+                        return True
+                except OSError:
+                    pass
+        return False
+
+    loaders = set()
+
+    # JavaScript: the dotenv package, a framework that loads .env by itself,
+    # Node's own --env-file option, or Bun (which always loads .env).
+    js_packages = ("dotenv", "next", "nuxt", "@nestjs/config")
+    uses_package = any(name in info.js_dependencies for name in js_packages)
+    uses_script = re.search(SCRIPT_LOADS_ENV, info.js_scripts)
+    uses_bun = (root / "bun.lockb").exists() or (root / "bun.lock").exists()
+    if uses_package or uses_script or uses_bun:
+        loaders.add("js")
+
+    # Python: a dotenv library, or Pipenv (which loads .env when it runs your app).
+    if info.py_dependencies & {"python-dotenv", "django-environ", "environs"} or (root / "Pipfile").exists():
+        loaders.add("python")
+
+    if mentions(["composer.json"], r"vlucas/phpdotenv|symfony/dotenv|laravel/framework"):
+        loaders.add("php")
+    if mentions(["pom.xml", "build.gradle", "build.gradle.kts"], r"(?i)dotenv"):
+        loaders.update({"java", "kotlin"})
+    if mentions(["*.csproj", "*/*.csproj"], r"DotNetEnv"):
+        loaders.add("csharp")
+    if any("godotenv" in module for module in info.go_modules):
+        loaders.add("go")
+    if mentions(["Gemfile"], r"dotenv"):
+        loaders.add("ruby")
+    if mentions(["Package.swift"], r"(?i)vapor|dotenv"):
+        loaders.add("swift")
+    return loaders

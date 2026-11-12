@@ -16,6 +16,13 @@ THE FIX
            Python:                 os.environ.get("STRIPE_SECRET_KEY")
        For Python, `import os` is added if the file doesn't have it.
 
+WHEN IT REPORTS INSTEAD OF FIXING
+    * The app doesn't load its .env file (no dotenv, no framework that
+      does it). The moved secret would come back empty and break the app,
+      so the card explains the setup to do first. See project.py.
+    * The code runs in the visitor's browser (a React/Vue page, a
+      "use client" file, a <script> tag). .env can't hide anything there.
+
 THE RULES
     SEC-001  The string matches a known key format (Stripe, AWS, GitHub,
              OpenAI, Anthropic, Google, Slack).
@@ -36,9 +43,11 @@ from pathlib import Path
 
 from tree_sitter import Node
 
-from decaloguex.languages import SourceFile, field, line_of, text, walk
+from decaloguex import languages
+from decaloguex.languages import SourceFile, field, line_of, text
 from decaloguex.models import AppendEdit, Finding, Fix, Severity, TextEdit
-from decaloguex.rules.common import python_import_edit
+from decaloguex.project import ENV_LOADING_HELP, ProjectInfo
+from decaloguex.rules.common import js_imported_modules, python_import_edit
 
 IMPACT = "Bots that scan GitHub can't steal it now. The value moved to .env, which stays on your computer."
 
@@ -47,21 +56,27 @@ IMPACT = "Bots that scan GitHub can't steal it now. The value moved to .env, whi
 # THE RULE
 # ===========================================================================
 
-def check(file: SourceFile, planner: EnvPlanner) -> list[Finding]:
+def check(file: SourceFile, planner: EnvPlanner, info: ProjectInfo | None = None) -> list[Finding]:
     """Scan one file for hard-coded secrets. Returns findings; writes nothing."""
     findings = []
-    for node in walk(file.root):
+    in_browser = runs_in_browser(file, info or ProjectInfo())
+    for node in file.nodes_of(*STRING_TYPES):
         literal = read_literal(node, file)
         if literal is None:
             continue  # not a string
         # `a or b` gives a if it isn't None, otherwise b.
-        finding = known_key_finding(file, literal, planner) or secret_name_finding(file, literal, planner)
+        finding = known_key_finding(file, literal, planner, in_browser) \
+            or secret_name_finding(file, literal, planner, in_browser)
         if finding is not None:
             findings.append(finding)
     return findings
 
 
-def known_key_finding(file: SourceFile, literal: Literal, planner: EnvPlanner) -> Finding | None:
+# The node types that are string literals (in JavaScript/TypeScript and Python).
+STRING_TYPES = ("string", "template_string")
+
+
+def known_key_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, in_browser: bool) -> Finding | None:
     """SEC-001 / SEC-003: the string matches a known key format."""
     for pattern in KNOWN_PATTERNS:
         match = pattern.regex.search(literal.value)
@@ -81,12 +96,12 @@ def known_key_finding(file: SourceFile, literal: Literal, planner: EnvPlanner) -
                            impact="Bots that scan GitHub can steal this key and run up charges on your account.",
                            note="The key sits inside a longer string. Move it to .env by hand.")
 
-        return fixable_finding(file, literal, planner, "SEC-001", title,
+        return fixable_finding(file, literal, planner, in_browser, "SEC-001", title,
                                env_name=pattern.env_name, shown=mask(literal.value, reveal=True))
     return None
 
 
-def secret_name_finding(file: SourceFile, literal: Literal, planner: EnvPlanner) -> Finding | None:
+def secret_name_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, in_browser: bool) -> Finding | None:
     """SEC-002: the string is stored in a variable named like a secret."""
     name = variable_name(literal.node)
     if name is None or not SECRET_NAME.search(name):
@@ -98,13 +113,21 @@ def secret_name_finding(file: SourceFile, literal: Literal, planner: EnvPlanner)
         return None
 
     kind = "password" if re.search(r"passw|pwd", name, re.IGNORECASE) else "secret"
-    return fixable_finding(file, literal, planner, "SEC-002", f"Hard-coded {kind} in '{name}'",
+    return fixable_finding(file, literal, planner, in_browser, "SEC-002", f"Hard-coded {kind} in '{name}'",
                            env_name=to_env_name(name), shown=mask(literal.value, reveal=False))
 
 
-def fixable_finding(file: SourceFile, literal: Literal, planner: EnvPlanner,
+def fixable_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, in_browser: bool,
                     rule_id: str, title: str, env_name: str, shown: str) -> Finding:
     """Build the finding and its fix: swap the string for an env lookup."""
+    if in_browser:
+        # Code in a web page runs in the visitor's BROWSER. Anything it can
+        # read, the visitor can read too, so .env can't hide it there. (In
+        # many setups `process.env` doesn't even exist in the browser, so
+        # the "fix" would crash the page.)
+        return Finding(rule_id, title, file.path, line_of(literal.node), IMPACT, Severity.CRITICAL,
+                       note="This code runs in the visitor's browser, so anyone can read the key. "
+                            "Move the code that uses it to your server, and keep the key there in .env.")
     env_name, needs_append = planner.reserve(env_name, literal.value)
     replacement = env_lookup_code(file, env_name, literal.node)
 
@@ -129,10 +152,63 @@ def env_lookup_code(file: SourceFile, env_name: str, node: Node) -> str:
     if file.is_python:
         return f'os.environ.get("{env_name}")'
     code = f"process.env.{env_name}"
+    if file.is_typescript:
+        # To TypeScript, process.env.X might be undefined, and its strict mode
+        # refuses to put that where a string is expected: the build fails.
+        # The ! says "trust me, it's set". It changes nothing when the app runs.
+        code += "!"
     # Inside a React tag (<Map apiKey="...">) code must be wrapped in { }.
     if node.parent is not None and node.parent.type == "jsx_attribute":
         return "{" + code + "}"
     return code
+
+
+# ---------------------------------------------------------------------------
+# Two checks that stop a "fix" from breaking the app
+# ---------------------------------------------------------------------------
+
+# Libraries that draw pages in the browser...
+UI_LIBRARIES = {"react", "react-dom", "react-dom/client", "vue", "svelte", "preact", "solid-js", "@angular/core"}
+# ...and frameworks that ALSO run that same code on a server.
+SERVER_RENDERERS = ("next", "nuxt", "@remix-run/node", "@remix-run/react", "gatsby", "astro", "@sveltejs/kit")
+# Things only a browser has.
+BROWSER_ONLY = re.compile(rb"\bimport\.meta\.env\b|\bwindow\.|\bdocument\.|\blocalStorage\b")
+USE_CLIENT = re.compile(rb"""^\s*["']use client["']""", re.MULTILINE)
+
+
+def runs_in_browser(file: SourceFile, info: ProjectInfo) -> bool:
+    """Is this JavaScript sent to the visitor's browser?
+
+    If so, a secret in it is already public, and .env can't help.
+    """
+    if file.is_python:
+        return False
+    if file.lang.embedded:
+        return True  # a <script> tag inside a web page
+    if USE_CLIENT.search(file.source) or BROWSER_ONLY.search(file.source):
+        return True  # Next.js's "use client" marker, or code that touches the page
+    is_ui_code = file.path.suffix.lower() in (".jsx", ".tsx") or bool(js_imported_modules(file) & UI_LIBRARIES)
+    renders_on_server = any(name in info.js_dependencies for name in SERVER_RENDERERS)
+    return is_ui_code and not renders_on_server
+
+
+def without_fixes_the_app_cannot_load(findings: list[Finding], env_loaders: set[str]) -> list[Finding]:
+    """Turn secret fixes into "What to do" cards when the app doesn't load .env.
+
+    Moving a secret into .env only works if the app READS .env when it
+    starts (see project.py). Where it doesn't, the fix would leave the app
+    with an empty key, so the finding keeps its warning but loses its fix,
+    and explains how to set up .env loading first.
+    """
+    result = []
+    for finding in findings:
+        language = languages.detect(finding.path)
+        is_secret_fix = finding.rule_id.startswith("SEC") and finding.fix is not None and language is not None
+        if is_secret_fix and language.family not in env_loaders:
+            finding = Finding(finding.rule_id, finding.title, finding.path, finding.line, finding.impact,
+                              finding.severity, note=ENV_LOADING_HELP[language.family])
+        result.append(finding)
+    return result
 
 
 # ===========================================================================
@@ -149,19 +225,25 @@ class SecretPattern:
 
 # r"..." is a RAW string: backslashes are kept as-is, so you write \d rather
 # than Java's "\\d". Always use raw strings for regexes in Python.
+#
+# (?<![0-9A-Za-z]) at the start means "not right after a letter or digit".
+# Without it, ordinary words would match: "task-management-dashboard"
+# contains "sk-management-dashboard", which looks like an OpenAI key.
 KNOWN_PATTERNS = [
     SecretPattern("Stripe secret key", "STRIPE_SECRET_KEY",
-                  re.compile(r"(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
+                  re.compile(r"(?<![0-9A-Za-z])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
     SecretPattern("AWS access key", "AWS_ACCESS_KEY_ID",
-                  re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")),
+                  re.compile(r"(?<![0-9A-Z])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])")),
     SecretPattern("GitHub token", "GITHUB_TOKEN",
                   re.compile(r"(?:ghp|gho|ghu|ghs|ghr)_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{40,}")),
     # Anthropic MUST come before OpenAI: "sk-ant-..." would also match the
     # looser OpenAI pattern, and the first match wins.
     SecretPattern("Anthropic API key", "ANTHROPIC_API_KEY",
-                  re.compile(r"sk-ant-[0-9A-Za-z_\-]{20,}")),
+                  re.compile(r"(?<![0-9A-Za-z])sk-ant-[0-9A-Za-z_\-]{20,}")),
+    # (?=...[0-9]) means "with a digit somewhere in it": real keys are random
+    # letters AND digits, while "sk-spinner-container-wrapper" is just words.
     SecretPattern("OpenAI API key", "OPENAI_API_KEY",
-                  re.compile(r"sk-(?:proj-|svcacct-)?[0-9A-Za-z_\-]{20,}")),
+                  re.compile(r"(?<![0-9A-Za-z])sk-(?:proj-|svcacct-)?(?=[0-9A-Za-z_\-]*[0-9])[0-9A-Za-z_\-]{20,}")),
     SecretPattern("Google API key", "GOOGLE_API_KEY",
                   re.compile(r"AIza[0-9A-Za-z_\-]{35}")),
     SecretPattern("Slack token", "SLACK_TOKEN",
@@ -185,7 +267,7 @@ NOT_SECRET_LAST_WORDS = {
 
 # Values that are obviously placeholders, not real secrets.
 PLACEHOLDER = re.compile(
-    r"your|xxx|example|changeme|placeholder|dummy|<|>|\$\{|process\.env|os\.environ|\*\*\*",
+    r"your|xxx|example|changeme|placeholder|dummy|<|>|\$\{|\{\{|process\.env|os\.environ|\*\*\*",
     re.IGNORECASE,
 )
 
@@ -202,7 +284,21 @@ def looks_like_secret(value: str) -> bool:
         return False                          # an env-var NAME like "STRIPE_KEY"
     if PLACEHOLDER.search(value):
         return False                          # "your-key-here"
+    if all(letter.isalpha() or letter in "_-." for letter in value):
+        # Only letters and separators: a WORD or a NAME, not a secret.
+        #   labels          { password: "Password" }
+        #   storage names   TOKEN_KEY = "auth_token"
+        # Real secrets are random, so they nearly always contain a digit or
+        # a symbol. (This lets a weak all-letters password through, but
+        # "moving" a label to .env would break the page it's shown on.)
+        return False
+    if VALIDATION_RULE.search(value):
+        return False                          # Laravel: 'password' => 'required|min:8'
     return len(set(value)) > 2                # "xxxxxxxx", "00000000"
+
+
+# Words that form-validation rules are made of.
+VALIDATION_RULE = re.compile(r"\b(?:required|nullable|sometimes|confirmed)\b")
 
 
 def to_env_name(name: str) -> str:

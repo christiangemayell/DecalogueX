@@ -1,0 +1,13 @@
+{
+  "name": "decaloguex",
+  "owner": {
+    "name": "christiangemayell"
+  },
+  "plugins": [
+    {
+      "name": "decaloguex",
+      "source": "./",
+      "description": "Finds and fixes leaked secrets, SQL injection, error leaks and crash risks in AI-written code."
+    }
+  ]
+}

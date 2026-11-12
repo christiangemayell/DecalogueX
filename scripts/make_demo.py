@@ -31,6 +31,7 @@ FILES = {
 {
   "name": "demo-shop",
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
     "mysql2": "^3.9.0",
     "stripe": "^14.0.0"
@@ -38,6 +39,7 @@ FILES = {
 }
 """,
     "server.js": f"""\
+require("dotenv").config();  // reads the .env file, so process.env has the secrets in it
 const express = require("express");
 const mysql = require("mysql2/promise");
 const Stripe = require("stripe");
@@ -78,9 +80,11 @@ app.listen(3000);
 import asyncio
 import sqlite3
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify
 from openai import OpenAI
 
+load_dotenv()  # reads the .env file, so os.environ has the secrets in it
 app = Flask(__name__)
 client = OpenAI(api_key="{OPENAI}")  # SEC-001
 DB_PASSWORD = "Summer2024!db"  # SEC-002
@@ -114,6 +118,51 @@ async def finish_order(email: str) -> None:
     send_receipt(email)  # ASYNC-003: missing await, so the email never sends
     asyncio.create_task(send_receipt("admin@example.com"))  # ASYNC-004
 ''',
+    # --- The same kinds of mistakes in other languages ---
+    "checkout.php": f"""\
+<?php
+$stripeKey = "{STRIPE}";  // SEC-001
+$pdo = new PDO($dsn);
+
+// SQL-001: the order number from the web address goes straight into the SQL.
+$result = $pdo->query("SELECT * FROM orders WHERE id = $orderId");
+
+try {{
+    chargeCard($stripeKey);
+}} catch (Exception $e) {{
+    echo 'Payment failed: ' . $e->getMessage();  // ERR-001
+}}
+""",
+    # Tells DecalogueX that the PHP code loads .env too (through phpdotenv).
+    "composer.json": '{"require": {"vlucas/phpdotenv": "^5.6"}}\n',
+    "go.mod": "module demo-shop\n\nrequire github.com/lib/pq v1.10.9\n",
+    "worker.go": """\
+package main
+
+import (
+\t"fmt"
+\t"net/http"
+)
+
+func orderHandler(w http.ResponseWriter, r *http.Request) {
+\tid := r.URL.Query().Get("id")
+\t// SQL-001: glued-together SQL.
+\trows, err := db.Query("SELECT * FROM orders WHERE id = " + id)
+\tif err != nil {
+\t\thttp.Error(w, err.Error(), 500) // ERR-001
+\t\treturn
+\t}
+\t// ASYNC-006: if this background job crashes, the whole server goes down.
+\tgo func() {
+\t\tsendReceipt(id)
+\t}()
+\tfmt.Fprintln(w, rows)
+}
+""",
+    # A settings file with a password in it (reported with instructions).
+    "config.yml": "database:\n  host: localhost\n  password: Sup3rS3cretPass!\n",
+    # A language DecalogueX can't read yet: it shows up under BLIND SPOTS.
+    "legacy.rs": "fn main() {\n    println!(\"old billing code\");\n}\n",
     # A local .env-style file that is NOT protected by any .gitignore yet.
     ".env.local": "SESSION_SECRET=local-dev-secret-123\n",
 }

@@ -94,6 +94,10 @@ def test_placeholders_and_non_secrets_are_ignored(tmp_path):
 
 
 def test_jsx_attribute_gets_braces(tmp_path):
+    # A Next.js project: its .jsx files also run on the server, where
+    # process.env works. (In a browser-only React app this is reported
+    # instead of fixed; see test_browser_code_is_not_given_process_env.)
+    write(tmp_path, "package.json", '{"dependencies": {"next": "^15.0.0"}}')
     app = write(tmp_path, "Map.jsx", f'export const M = () => <Widget apiKey="{FAKE_OPENAI}" />;\n')
 
     run_scan(tmp_path, assume_yes=True, no_color=True)

@@ -1,18 +1,55 @@
+<p align="center">
+  <img src="assets/logo.jpg" alt="DecalogueX logo: an ice-blue ten-point star" width="180">
+</p>
+
 # DecalogueX: Crash Doctor
 
 **DecalogueX finds and fixes the mistakes AI coding tools often make.**
 
-You point it at a project. It reads the code, lists the problems, and asks
-whether you want them fixed. Say yes, and it fixes them for you.
+You point it at a project. It reads the code, explains every problem in
+plain words, and asks whether you want them fixed. Say yes, and it fixes
+them for you. Change your mind, and `decaloguex undo` puts everything back.
 
-It works on **JavaScript**, **TypeScript** and **Python** code.
+It checks **JavaScript, TypeScript, Python, PHP, Java, C#, Go, Ruby, Kotlin,
+Swift, HTML, Vue and Svelte**, plus settings files like `.yml` and `.json`.
+
+It's free, and it's open source (MIT license).
+
+---
+
+## Install
+
+Pick whichever you already have:
+
+| You have | Type this |
+|---|---|
+| **Node.js** (most JavaScript developers) | `npx decaloguex scan .` |
+| **Python 3.10 or newer** | `pip install decaloguex` then `decaloguex scan .` |
+
+### Use it inside your AI coding tool
+
+DecalogueX comes as an **Agent Skill**, so your AI assistant can run it
+after it writes code.
+
+- **Claude Code:** run these in your terminal
+  ```
+  claude plugin marketplace add christiangemayell/decaloguex
+  claude plugin install decaloguex@decaloguex
+  ```
+- **Cursor, Codex and other tools that support Agent Skills:** copy the
+  `skills/decaloguex` folder into your project's `.agents/skills/` folder
+  (or `.cursor/skills/` or `.claude/skills/`).
+- **Any other AI tool:** add this line to your project's `AGENTS.md` file:
+  ```
+  After changing code, run `npx decaloguex scan . --json` and fix what it reports.
+  ```
 
 ---
 
 ## Try it in 3 steps
 
-Open the terminal in VS Code (menu: **Terminal → New Terminal**). Then type
-these one at a time, pressing Enter after each:
+In this project's folder, open the terminal in VS Code (menu: **Terminal →
+New Terminal**) and type these one at a time, pressing Enter after each:
 
 **1. Build a practice app full of mistakes**
 ```
@@ -23,7 +60,7 @@ python scripts/make_demo.py
 ```
 decaloguex scan demo
 ```
-It explains every problem it found in plain words, then asks what you want to do:
+It explains every problem in plain words, then asks what you want to do:
 
 - **A**: fix everything
 - **O**: go through them one by one, answering yes or no for each
@@ -35,9 +72,12 @@ Type `A` and press Enter.
 ```
 decaloguex scan demo
 ```
-This time it should say **No crash hazards found**. Everything got fixed.
+Everything that could be fixed is fixed. What's left is a **"What to do"**
+card, for the one problem that needs a human.
 
 Run step 1 again any time to get a fresh broken app to practise on.
+
+> **Windows tip:** if `decaloguex` isn't recognised, type `.venv\Scripts\decaloguex` instead.
 
 ---
 
@@ -49,11 +89,50 @@ Run step 1 again any time to get a fresh broken app to practise on.
 | **Secret files not hidden from Git** | `.env` can get uploaded to GitHub by accident | Adds them to `.gitignore` |
 | **SQL injection** (user input glued into database queries) | A hacker can type database commands into a form and read or delete your data | Rewrites the query the safe way |
 | **Error details shown to visitors** | Error messages can reveal file paths, database details and personal information | Shows visitors a friendly message and keeps the real error private |
-| **Async code with no error handling** | One failed database call can crash the whole server, or a function silently never runs | Adds the missing error handling or `await` |
+| **Async code with no safety net** | One failed database call can crash the whole server, or a job silently never runs | Adds the missing error handling |
 
 **It never guesses.** If it can't be sure a fix is safe, it changes nothing
-and tells you what to do yourself. You'll see this as a **"Manual step"** in
-the report.
+and tells you exactly what to do yourself, in a **"What to do"** card.
+
+**It's honest about what it can't check.** Files in languages it can't read
+yet are listed under **BLIND SPOTS** at the end of every scan, and saved in
+`.decaloguex/blind-spots.json`.
+
+### What it fixes in each language
+
+| | Secrets | SQL injection | Error leaks | Crash risks |
+|---|---|---|---|---|
+| JavaScript / TypeScript | ✔ fixed | ✔ fixed | ✔ fixed | ✔ fixed |
+| Python | ✔ fixed | ✔ fixed | ✔ fixed | ✔ fixed |
+| PHP | ✔ fixed | ✔ fixed (PDO) | ✔ fixed | not needed |
+| Go | ✔ fixed | ✔ fixed | ✔ fixed | ✔ fixed |
+| Ruby | ✔ fixed | ✔ fixed (ActiveRecord) | ✔ fixed | not needed |
+| C# | ✔ fixed | instructions | ✔ fixed | ✔ fixed |
+| Java | ✔ fixed | instructions | ✔ fixed | ✔ fixed |
+| Kotlin | ✔ fixed | instructions | ✔ fixed | instructions |
+| Swift | ✔ fixed | instructions | ✔ fixed | instructions |
+| HTML / Vue / Svelte | instructions* | ✔ fixed | n/a | ✔ fixed |
+| Settings files (.yml, .json...) | instructions | n/a | n/a | n/a |
+
+\* A key in a web page runs in the visitor's browser, so `.env` can't hide it.
+DecalogueX explains how to move it to your server instead. The same goes for
+browser-only React, Vue and Svelte apps.
+
+### Secrets are only moved if your app loads `.env`
+
+A `.env` file does nothing by itself. Your app has to **read** it when it
+starts, usually with a small library called dotenv, or a framework that does
+it for you, like Next.js. If nothing reads `.env`, a moved secret would come
+back empty and your app would break.
+
+So before moving a secret, DecalogueX looks for proof that `.env` gets
+loaded: dotenv in your project's files, or a framework that loads it. If it
+can't find any, it leaves the secret where it is and tells you the two-line
+setup to do first. Then scan again, and it moves the secret for you.
+
+If your app gets its settings another way (from Docker or your hosting
+dashboard, say), set `DECALOGUEX_ENV_LOADED=1` and DecalogueX will take your
+word for it.
 
 ---
 
@@ -61,14 +140,32 @@ the report.
 
 | Command | What it does |
 |---|---|
-| `decaloguex scan demo` | Scan the practice app and offer to fix it |
-| `decaloguex scan .` | Scan the folder you're in |
-| `decaloguex scan demo --dry-run` | Only show problems, never change anything |
-| `decaloguex scan demo --yes` | Fix everything without asking |
-| `decaloguex scan demo --no-animation` | Same screen, without the moving bars and spinners |
+| `decaloguex scan .` | Scan the folder you're in, explain the problems, and ask what to fix |
+| `decaloguex scan . --dry-run` | Only show problems, never change anything |
+| `decaloguex scan . --yes` | Fix everything without asking |
+| `decaloguex undo` | Put back everything the last fix changed |
+| `decaloguex scan . --json` | A report for AI tools (add `--yes` to also fix) |
+| `decaloguex scan . --no-animation` | Same screen, without the moving bars and scenes |
+| `decaloguex telemetry off` | Switch off the anonymous usage stats |
 | `pytest` | Run the tests, to check the program still works |
 
 You can also press **F5** in VS Code to run a scan step by step in the debugger.
+
+---
+
+## Privacy
+
+DecalogueX sends **anonymous usage stats** so it can be improved: things like
+how many files of each language were checked, which rules found problems, and
+which languages it couldn't read yet. A short notice tells you this the first
+time you run it, and nothing at all is sent on that first run.
+
+- **Never sent:** your code, file or folder names, project names, secrets,
+  error messages, or anything that identifies you.
+- **Switch it off any time:** `decaloguex telemetry off`
+- It's also off automatically if you've set `DO_NOT_TRACK=1`.
+
+The full list of what's sent is at the top of `decaloguex/telemetry.py`.
 
 ---
 
@@ -79,8 +176,13 @@ You can also press **F5** in VS Code to run a scan step by step in the debugger.
 | `decaloguex/` | **The program itself.** This is the code that matters. |
 | `tests/` | Checks that the program works. Run them with `pytest`. |
 | `scripts/` | A helper that builds the practice app. |
+| `assets/` | The logo and other images for the README. |
 | `demo/` | The practice app. It's rebuilt from scratch each time, so don't edit it. |
+| `skills/` | The Agent Skill that teaches AI tools to use DecalogueX |
+| `.claude-plugin/` | The files that let Claude Code install the skill |
+| `npm/` | The small launcher behind `npx decaloguex` |
 | `README.md` | This file. |
+| `LICENSE` | The MIT license: anyone may use this, with your name kept on it |
 | `pyproject.toml` | The project's ID card: its name and what it needs to run. |
 | `.gitignore` | The list of files Git should never save, like secrets and junk. |
 | `.venv/` | Python and its add-ons, installed just for this project. Never touch it. |
@@ -111,15 +213,20 @@ A good order to read the program in:
 | 4 | `decaloguex/rules/gitignore.py` | Checks the `.gitignore` file |
 | 5 | `decaloguex/rules/errors.py` | Hides error details from visitors |
 | 6 | `decaloguex/rules/async_.py` | Adds missing error handling to async code |
-| 7 | `decaloguex/rules/sql.py` | Fixes SQL injection (the longest, because every database works a bit differently) |
-| 8 | `decaloguex/engine.py` | Runs all the rules and saves the fixes safely |
-| 9 | `decaloguex/cli.py` | The `decaloguex` command you type, step by step |
-| 10 | `decaloguex/ui.py` | Everything on screen: the animations, problem cards and questions |
-| 11 | `decaloguex/explain.py` | The plain-English explanation of every problem. Edit this to change what users read. |
-| 12 | `decaloguex/scenes.py` | The fantasy animations (shield, dragon, wizard) shown while your code is fixed |
+| 7 | `decaloguex/rules/sql.py` | Fixes SQL injection (long, because every database works a bit differently) |
+| 8 | `decaloguex/rules/other_languages.py` | The same rules for PHP, Java, C#, Go, Ruby, Kotlin and Swift, using one "profile" per language |
+| 9 | `decaloguex/rules/config_files.py` | Secrets in settings files |
+| 10 | `decaloguex/engine.py` | Runs all the rules and saves the fixes safely |
+| 11 | `decaloguex/cli.py` | The `decaloguex` command you type, step by step |
+| 12 | `decaloguex/ui.py` | Everything on screen: the animations, problem cards and questions |
+| 13 | `decaloguex/explain.py` | The plain-English explanation of every problem. Edit this to change what users read. |
+| 14 | `decaloguex/scenes.py` | The fantasy animations (shield, dragon, wizard) shown while your code is fixed |
+| 15 | `decaloguex/undo.py` | The undo button |
+| 16 | `decaloguex/blindspots.py` | The honest list of what couldn't be checked |
+| 17 | `decaloguex/telemetry.py` | The anonymous usage stats |
 
-Smaller helper files: `project.py` (finds the project's files) and
-`rules/common.py` (small jobs the rules share).
+Smaller helper files: `project.py` (finds the project's files and libraries)
+and `rules/common.py` (small jobs the rules share).
 
 ---
 
@@ -129,7 +236,14 @@ Smaller helper files: `project.py` (finds the project's files) and
   text, so comments or similar-looking words don't fool it.
 - **It checks every fix.** After changing a file, it re-reads it. If the
   change would break the code, the file isn't saved.
+- **It only moves a secret if your app will find it again.** See "Secrets
+  are only moved if your app loads `.env`" above.
+- **It won't patch a file that changed after the scan.** If you edit a file
+  while it's waiting for your answer, that file is skipped.
 - **It asks first.** Nothing changes unless you say yes, or use `--yes`.
+- **It can undo.** Every fix is backed up first; `decaloguex undo` restores it.
+- **It doesn't crash on strange code.** If a rule gets confused by a file,
+  it skips that file, keeps going, and lists it as a blind spot.
 
 ---
 
@@ -163,7 +277,7 @@ Each problem in the report has an ID, so you can look it up here.
 | ID | The problem |
 |---|---|
 | SEC-001 | An API key in a known format (Stripe, OpenAI, AWS...) |
-| SEC-002 | A password or secret stored in a variable with a secret-sounding name |
+| SEC-002 | A password or secret stored under a secret-sounding name |
 | SEC-003 | A private key (reported only) |
 | GIT-001 | Secret files that `.gitignore` doesn't hide |
 | GIT-002 | A secret file already saved in Git (reported only) |
@@ -175,6 +289,11 @@ Each problem in the report has an ID, so you can look it up here.
 | ASYNC-002 | A `.then()` chain with no `.catch()` |
 | ASYNC-003 | A Python `async` function called without `await` (it never runs) |
 | ASYNC-004 | A Python background task that can vanish before it finishes |
+| ASYNC-005 | A C# `async void` method (an error crashes the whole app) |
+| ASYNC-006 | A Go goroutine with no `recover()` (a panic crashes the whole program) |
+| ASYNC-007 | A Java `CompletableFuture` whose errors are silently lost |
+| ASYNC-008 | A Kotlin `GlobalScope.launch` with no error handler (reported only) |
+| ASYNC-009 | A Swift `Task` whose errors are silently lost (reported only) |
 
 </details>
 

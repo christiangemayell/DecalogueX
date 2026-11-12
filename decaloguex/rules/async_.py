@@ -128,9 +128,7 @@ def express_catches_async_errors(file: SourceFile, info: ProjectInfo) -> bool:
 def route_handlers(file: SourceFile) -> list[Node]:
     """Async functions passed to app.get(...), router.post(...) and so on."""
     handlers = []
-    for call in walk(file.root):
-        if call.type != "call_expression":
-            continue
+    for call in file.nodes_of("call_expression"):
         function = field(call, "function")
         if function is None or function.type != "member_expression":
             continue
@@ -181,6 +179,12 @@ def route_finding(file: SourceFile, handler: Node, body: Node) -> Finding:
     edits = []
     if len(params) == 2:
         # (req, res)  ->  (req, res, next)
+        if any(node.type == "identifier" and text(node) == "next" for node in walk(handler)):
+            # The route already has something called `next` (const next = ...).
+            # A second `next` is a "already declared" error when the app starts.
+            return Finding("ASYNC-001", title, file.path, line, ASYNC_001_IMPACT,
+                           note=ASYNC_001_NOTE + " This route already uses the name `next` for something "
+                                                 "else, so give the new third parameter a different name.")
         next_name = "next"
         # TypeScript wants a type on a new parameter. This one needs no import.
         addition = ", next: (err?: unknown) => void" if file.is_typescript else ", next"
@@ -287,7 +291,7 @@ def own_nodes(root: Node, function_types: set[str]):
 def check_missing_catch(file: SourceFile) -> list[Finding]:
     handler = ".catch((err) => console.error(err))"
     findings = []
-    for node in walk(file.root):
+    for node in file.nodes_of("expression_statement"):
         # Only a promise chain that is a whole statement on its own. If it's
         # returned, awaited or stored, someone else may still handle errors.
         found = is_whole_statement(node)
@@ -312,6 +316,7 @@ def unhandled_chain(call: Node) -> bool:
     a.then(f).then(g)          -> True
     a.then(f).catch(h)         -> False   (has .catch)
     a.then(f, onError)         -> False   (the second function handles errors)
+    cy.get(x).then(f)          -> False   (Cypress test commands: see below)
     """
     # Walk back along the chain:  a.then(f).finally(g)  ->  ["finally", "then"]
     chain = []
@@ -325,6 +330,11 @@ def unhandled_chain(call: Node) -> bool:
 
     names = [name for name, _ in chain]
     if not names or names[0] not in ("then", "finally") or "then" not in names:
+        return False
+    # After the loop, `node` is whatever the chain starts from. Cypress test
+    # commands (cy.get(...).then(...)) have .then() but NO .catch(), so
+    # adding one would crash the test.
+    if text(node) in ("cy", "Cypress"):
         return False
     if "catch" in names:
         return False
@@ -340,59 +350,96 @@ AWAIT_IMPACT = "The code inside this function now actually runs, and its errors 
 
 
 def check_missing_await(file: SourceFile) -> list[Finding]:
-    functions, methods = async_names(file)
-    if not functions and not methods:
-        return []
+    if not file.nodes_of("function_definition"):
+        return []  # no functions at all, so nothing to forget to await
 
     findings = []
-    for node in walk(file.root):
+    known: dict = {}  # remembers each scope's functions, so they're only listed once
+    for node in file.nodes_of("expression_statement"):
         found = is_whole_statement(node)
         if found is None:
             continue
         statement, call = found
-        if call.type != "call" or not calls_async(call, functions, methods):
+        if call.type != "call":
             continue
-        findings.append(missing_await_finding(file, statement, call))
+        target = async_function_called(file, call, known)
+        if target is None or is_generator(target):
+            continue
+        findings.append(missing_await_finding(file, statement, call, target))
     return findings
 
 
-def async_names(file: SourceFile) -> tuple[set[str], set[str]]:
-    """Names of async functions defined in this file.
+def functions_in(scope: Node, known: dict) -> dict[str, list[Node]]:
+    """Function name -> the functions with that name directly inside `scope`.
 
-    Returns (module-level functions, methods inside classes). Methods are
-    matched when called as self.<name>(...).
+    `known` is a notebook shared across the whole file: a scope (the file,
+    or one class) is only searched the first time it's asked about.
     """
-    functions = set()
-    methods = set()
-    for node in walk(file.root):
-        if node.type != "function_definition" or not is_async(node):
-            continue
-        name = text(field(node, "name"))
-        holder = node.parent
-        if holder.type == "decorated_definition":  # skip past @decorators
-            holder = holder.parent
-        if holder.type == "module":
-            functions.add(name)
-        elif holder.type == "block" and holder.parent.type == "class_definition":
-            methods.add(name)
-    return functions, methods
+    if scope.id not in known:
+        by_name: dict[str, list[Node]] = {}
+        for child in scope.named_children:
+            definition = field(child, "definition") if child.type == "decorated_definition" else child
+            if definition is not None and definition.type == "function_definition":
+                by_name.setdefault(text(field(definition, "name")), []).append(definition)
+        known[scope.id] = by_name
+    return known[scope.id]
 
 
-def calls_async(call: Node, functions: set[str], methods: set[str]) -> bool:
+def async_function_called(file: SourceFile, call: Node, known: dict) -> Node | None:
+    """The `async def` that this call runs, or None if we can't be sure.
+
+    Two kinds of call are understood:
+        send(x)        a function defined at the top level of this file
+        self.send(x)   a method of the class the call is written in
+
+    "The class the call is written in" matters: two classes can each have
+    a method called run(), one async and one not. Adding `await` to the
+    normal one would crash the program.
+    """
     callee = field(call, "function")
     if callee.type == "identifier":
-        return text(callee) in functions                       # send(...)
-    if callee.type == "attribute":
-        on_self = text(field(callee, "object")) == "self"
-        return on_self and text(field(callee, "attribute")) in methods  # self.send(...)
-    return False
+        scope = file.root                                         # the whole file
+        name = text(callee)
+    elif callee.type == "attribute" and text(field(callee, "object")) == "self":
+        owner = next((a for a in ancestors(call) if a.type == "class_definition"), None)
+        scope = field(owner, "body")                              # that class's body
+        name = text(field(callee, "attribute"))
+    else:
+        return None
+    if scope is None:
+        return None
+
+    # Every function with that name in the scope. More than one (the name is
+    # defined twice) means we can't tell which one runs.
+    matches = functions_in(scope, known).get(name, [])
+    if len(matches) == 1 and is_async(matches[0]):
+        return matches[0]
+    return None
 
 
-def missing_await_finding(file: SourceFile, statement: Node, call: Node) -> Finding:
+def is_generator(function: Node) -> bool:
+    """An `async def` that uses `yield` is an async GENERATOR.
+
+    Calling it hands back a stream of values to loop over with `async for`.
+    `await` on it is an error, so it must never be "fixed" that way.
+    """
+    return any(node.type == "yield" for node in own_nodes(field(function, "body"), {"function_definition", "lambda"}))
+
+
+def missing_await_finding(file: SourceFile, statement: Node, call: Node, target: Node) -> Finding:
     name = text(field(call, "function"))
     title = f"{name}() is async but isn't awaited, so it never runs"
     line = line_of(statement)
     function = next((a for a in ancestors(statement) if a.type in ("function_definition", "lambda")), None)
+
+    if target.parent is not None and target.parent.type == "decorated_definition":
+        # A decorator (the @something line above a function) can swap the
+        # function for something else entirely, such as a background-job
+        # launcher that must NOT be awaited. Only a person can tell.
+        return Finding("ASYNC-003", title, file.path, line, AWAIT_IMPACT, Severity.CRITICAL,
+                       note=f"{name}() has a decorator (an @ line above it), which can change how it "
+                            "must be called. If it's still a normal async function, add `await` in "
+                            "front of this call.")
 
     if function is not None and function.type == "function_definition" and is_async(function):
         # Inside an async function: just add `await`.
@@ -429,7 +476,7 @@ TASK_IMPACT = "The task is kept alive until it finishes, instead of being garbag
 
 def check_lost_tasks(file: SourceFile) -> list[Finding]:
     findings = []
-    for node in walk(file.root):
+    for node in file.nodes_of("expression_statement"):
         found = is_whole_statement(node)
         if found is None:
             continue

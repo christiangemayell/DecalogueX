@@ -95,3 +95,28 @@ def test_every_rule_has_a_plain_explanation():
         used |= set(re.findall(r'"((?:SEC|GIT|SQL|ERR|ASYNC)-\d{3})"', rule_file.read_text(encoding="utf-8")))
     missing = used - EXPLANATIONS.keys()
     assert not missing, f"Add these to explain.py: {sorted(missing)}"
+
+
+# --- The approval stamp -----------------------------------------------------------
+
+def test_clean_code_gets_the_stamp(tmp_path, capsys):
+    write(tmp_path, "app.py", "print('hello')\n")
+    write(tmp_path, ".gitignore", ".env\n")
+    run_scan(tmp_path)
+    shown = capsys.readouterr().out
+    assert "DECALOGUEX VERIFICATION COMPLETE" in shown and "A P P R O V E D" in shown
+
+
+def test_fixing_everything_earns_the_stamp(tmp_path, capsys):
+    write(tmp_path, "app.py", TWO_PROBLEMS)
+    run_scan(tmp_path, ask=typing("a"))
+    assert "VERIFICATION COMPLETE" in capsys.readouterr().out
+
+
+def test_no_stamp_while_problems_are_left(tmp_path, capsys):
+    # Approving code that still has problems would be false advertising.
+    write(tmp_path, "app.py", TWO_PROBLEMS)
+    run_scan(tmp_path, ask=typing("o", "y", "n", "n"))  # fix one, skip the rest
+    shown = capsys.readouterr().out
+    assert "VERIFICATION COMPLETE" not in shown
+    assert "Not approved yet" in shown

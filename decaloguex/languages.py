@@ -23,11 +23,21 @@ from __future__ import annotations
 
 from collections.abc import Iterator  # like java.util.Iterator
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
+import re
+
 import tree_sitter
+import tree_sitter_c_sharp
+import tree_sitter_go
+import tree_sitter_java
 import tree_sitter_javascript
+import tree_sitter_kotlin
+import tree_sitter_php
 import tree_sitter_python
+import tree_sitter_ruby
+import tree_sitter_swift
 import tree_sitter_typescript
 
 
@@ -39,18 +49,38 @@ import tree_sitter_typescript
 class LanguageInfo:
     """A language DecalogueX can scan."""
 
-    name: str    # "javascript", "typescript", "tsx" or "python"
-    # Most rules only care about the family: JavaScript and TypeScript are
-    # fixed the same way, Python another way.
-    family: str  # "js" or "python"
+    name: str      # "javascript", "php", "vue", ...
+    # The "family" decides which rules run:
+    #   "js" and "python"  have their own detailed rules (secrets.py, sql.py, ...)
+    #   every other family  uses the shared rules in rules/other_languages.py
+    family: str
     grammar: tree_sitter.Language
+    label: str = ""          # the name people know, e.g. "C#" (shown in reports)
+    # True for HTML, Vue and Svelte files: the JavaScript lives inside
+    # <script> tags, surrounded by page markup. See parse() below.
+    embedded: bool = False
+
+
+def _grammar(language_function) -> tree_sitter.Language:
+    return tree_sitter.Language(language_function())
 
 
 # These are module-level constants, like `static final` fields in Java.
-JAVASCRIPT = LanguageInfo("javascript", "js", tree_sitter.Language(tree_sitter_javascript.language()))
-TYPESCRIPT = LanguageInfo("typescript", "js", tree_sitter.Language(tree_sitter_typescript.language_typescript()))
-TSX = LanguageInfo("tsx", "js", tree_sitter.Language(tree_sitter_typescript.language_tsx()))  # TypeScript + React tags
-PYTHON = LanguageInfo("python", "python", tree_sitter.Language(tree_sitter_python.language()))
+JAVASCRIPT = LanguageInfo("javascript", "js", _grammar(tree_sitter_javascript.language), "JavaScript")
+TYPESCRIPT = LanguageInfo("typescript", "js", _grammar(tree_sitter_typescript.language_typescript), "TypeScript")
+TSX = LanguageInfo("tsx", "js", _grammar(tree_sitter_typescript.language_tsx), "TypeScript")  # TypeScript + React tags
+PYTHON = LanguageInfo("python", "python", _grammar(tree_sitter_python.language), "Python")
+PHP = LanguageInfo("php", "php", _grammar(tree_sitter_php.language_php), "PHP")
+JAVA = LanguageInfo("java", "java", _grammar(tree_sitter_java.language), "Java")
+CSHARP = LanguageInfo("csharp", "csharp", _grammar(tree_sitter_c_sharp.language), "C#")
+GO = LanguageInfo("go", "go", _grammar(tree_sitter_go.language), "Go")
+RUBY = LanguageInfo("ruby", "ruby", _grammar(tree_sitter_ruby.language), "Ruby")
+KOTLIN = LanguageInfo("kotlin", "kotlin", _grammar(tree_sitter_kotlin.language), "Kotlin")
+SWIFT = LanguageInfo("swift", "swift", _grammar(tree_sitter_swift.language), "Swift")
+# Web pages: the JavaScript inside <script> tags is checked with the JavaScript rules.
+HTML = LanguageInfo("html", "js", JAVASCRIPT.grammar, "HTML", embedded=True)
+VUE = LanguageInfo("vue", "js", JAVASCRIPT.grammar, "Vue", embedded=True)
+SVELTE = LanguageInfo("svelte", "js", JAVASCRIPT.grammar, "Svelte", embedded=True)
 
 # File extension -> language. A dict is Python's HashMap, written as {key: value}.
 EXTENSIONS: dict[str, LanguageInfo] = {
@@ -63,6 +93,18 @@ EXTENSIONS: dict[str, LanguageInfo] = {
     ".cts": TYPESCRIPT,
     ".tsx": TSX,
     ".py": PYTHON,
+    ".php": PHP,
+    ".java": JAVA,
+    ".cs": CSHARP,
+    ".go": GO,
+    ".rb": RUBY,
+    ".kt": KOTLIN,
+    ".kts": KOTLIN,
+    ".swift": SWIFT,
+    ".html": HTML,
+    ".htm": HTML,
+    ".vue": VUE,
+    ".svelte": SVELTE,
 }
 
 
@@ -73,8 +115,47 @@ def detect(path: Path) -> LanguageInfo | None:
 
 
 def parse(language: LanguageInfo, source: bytes) -> tree_sitter.Tree:
-    """Parse source code (raw bytes) into a syntax tree."""
+    """Parse source code (raw bytes) into a syntax tree.
+
+    For web pages (HTML, Vue, Svelte), only the code inside <script> tags
+    is JavaScript. See script_only() for how that's handled.
+    """
+    if language.embedded:
+        grammar = TYPESCRIPT.grammar if _uses_typescript(source) else JAVASCRIPT.grammar
+        return tree_sitter.Parser(grammar).parse(script_only(source))
     return tree_sitter.Parser(language.grammar).parse(source)
+
+
+# <script ...> CONTENT </script>. (?is) means: ignore case, and let . match newlines.
+_SCRIPT_TAG = re.compile(rb"(?is)<script\b([^>]*)>(.*?)</script\s*>")
+
+
+def script_only(source: bytes) -> bytes:
+    """Blank out everything that isn't inside a <script> tag.
+
+    Every other character becomes a space (newlines are kept), so the
+    result is EXACTLY as long as the original, with every line in the same
+    place. That's the trick: the JavaScript rules see plain JavaScript, yet
+    every position they report still points at the right spot in the real
+    file, so fixes land in the right place.
+    """
+    keep = bytearray(b" " * len(source))  # bytearray is a changeable byte[]
+    for newline in re.finditer(rb"\n", source):
+        keep[newline.start()] = ord("\n")
+    for match in _SCRIPT_TAG.finditer(source):
+        attributes = match.group(1).lower()
+        if b"src=" in attributes:
+            continue  # <script src="..."> loads a file; there's no code here
+        if b"type=" in attributes and not re.search(rb"type=[\"']?(?:text/javascript|module)", attributes):
+            continue  # e.g. type="application/ld+json" is data, not code
+        start, end = match.span(2)  # where the code inside the tag starts and ends
+        keep[start:end] = source[start:end]
+    return bytes(keep)
+
+
+def _uses_typescript(source: bytes) -> bool:
+    """Vue and Svelte mark TypeScript with <script lang="ts">."""
+    return bool(re.search(rb"(?i)<script\b[^>]*\blang=[\"']?(?:ts|typescript)\b", source))
 
 
 def has_syntax_errors(language: LanguageInfo, source: bytes) -> bool:
@@ -120,6 +201,59 @@ class SourceFile:
     @property
     def root(self) -> tree_sitter.Node:
         return self.tree.root_node
+
+    # @cached_property works out the value the FIRST time it's read, then
+    # remembers it. Every rule needs the file's nodes, so listing them once
+    # and sharing the list makes scans several times faster.
+    @cached_property
+    def _listing(self) -> tuple[list[tree_sitter.Node], dict[str, list[int]]]:
+        """One walk over the tree that builds two things:
+
+        nodes      every NAMED node, parents before children
+        positions  node type -> where nodes of that type sit in `nodes`
+                   (an index, like the one at the back of a book)
+        """
+        nodes: list[tree_sitter.Node] = []
+        positions: dict[str, list[int]] = {}
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            # setdefault returns the list for this type, creating it if needed
+            # (Java: computeIfAbsent).
+            positions.setdefault(node.type, []).append(len(nodes))
+            nodes.append(node)
+            stack.extend(reversed(node.named_children))
+        return nodes, positions
+
+    @property
+    def nodes(self) -> list[tree_sitter.Node]:
+        """Every NAMED node in the file, parents before children.
+
+        "Named" nodes are the meaningful ones: strings, calls, statements.
+        Punctuation such as ( , ; is left out. No rule looks for it, and
+        it makes up about half of all the nodes in a file.
+        """
+        return self._listing[0]
+
+    @property
+    def _positions_by_type(self) -> dict[str, list[int]]:
+        return self._listing[1]
+
+    def node_types(self) -> list[str]:
+        """Every node type that appears in this file, e.g. ["module", "string", "call"]."""
+        return list(self._positions_by_type)
+
+    def nodes_of(self, *types: str) -> list[tree_sitter.Node]:
+        """The nodes of the given types, in the order they appear in the file.
+
+        Most rules only care about a few kinds of node. A rule about
+        strings asks for file.nodes_of("string") and gets just those,
+        instead of checking every node in the file one by one.
+        """
+        positions = [p for kind in types for p in self._positions_by_type.get(kind, ())]
+        if len(types) > 1:
+            positions.sort()  # put the different types back into file order
+        return [self.nodes[p] for p in positions]
 
 
 def load(path: Path) -> SourceFile | None:

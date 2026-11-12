@@ -34,6 +34,9 @@ THE FIX
 WHAT IS NOT FLAGGED
     * Responses with a 4xx status (400, 404, ...). Those are usually
       deliberate messages for the user, like "Email already taken".
+    * (Reported, but not changed:) responses whose status is worked out
+      while the app runs, like res.status(err.status || 500). Those send
+      the deliberate 404s too, so swapping the message would hide them.
     * Python `except ValueError as e:` and other SPECIFIC error types,
       unless the response is a 5xx. Showing a specific error's message is
       usually on purpose. `except Exception` catches everything, including
@@ -77,6 +80,20 @@ def manual(file: SourceFile, line: int, title: str, note: str) -> Finding:
     return Finding("ERR-001", title, file.path, line, IMPACT, Severity.WARNING, note=note)
 
 
+# Returned by the status helpers when a status IS set, but not as a plain
+# number: res.status(err.status || 500). Its value is only known when the
+# app runs, so we can't tell a deliberate 404 from a real server error.
+DYNAMIC = -1
+DYNAMIC_STATUS_NOTE = ("The status code is chosen while the app runs, so this may also send deliberate "
+                       "messages like 404 \"Not found\". Send a generic message when the status is 500 "
+                       "or more, and log the real error.")
+
+
+def mentions(code: str, name: str) -> bool:
+    """Does this code use the variable `name`? (As a whole word: `e` isn't in `email`.)"""
+    return re.search(rf"\b{re.escape(name)}\b", code) is not None
+
+
 def outermost_only(nodes: list[Node]) -> list[Node]:
     """Drop duplicates, and nodes that sit inside another node in the list.
 
@@ -114,7 +131,7 @@ JS_FUNCTIONS = ("arrow_function", "function_expression", "function_declaration",
 
 def check_javascript(file: SourceFile) -> list[Finding]:
     findings = []
-    for call in walk(file.root):
+    for call in file.nodes_of("call_expression", "new_expression"):
         # Step 1: a call that sends a response...
         if not is_js_response(call):
             continue
@@ -131,7 +148,12 @@ def check_javascript(file: SourceFile) -> list[Finding]:
             node for node in walk(field(call, "arguments"))
             if node.type in ("identifier", "shorthand_property_identifier") and text(node) == error_name
         ]
-        if uses:
+        if not uses:
+            continue
+        if status == DYNAMIC:
+            findings.append(manual(file, line_of(call), f"Error details sent to visitors ({error_name})",
+                                   DYNAMIC_STATUS_NOTE))
+        else:
             findings.append(js_finding(file, call, error_name, handler, uses))
     return findings
 
@@ -142,7 +164,7 @@ def js_finding(file: SourceFile, call: Node, error_name: str, handler: Node, use
     title = f"Error details sent to visitors ({error_name})"
     edits = js_mask_edits(file, call, uses)
 
-    if not js_already_logged(handler):
+    if not js_already_logged(handler, error_name):
         log = f"console.error({error_name});"
         statement = js_statement(call)
         if statement is not None:
@@ -172,10 +194,12 @@ def js_finding(file: SourceFile, call: Node, error_name: str, handler: Node, use
 def js_mask_edits(file: SourceFile, call: Node, uses: list[Node]) -> list[TextEdit]:
     """Edits that swap each leaking expression for the generic message."""
     edits = []
-    # { err } is short for { err: err }. It needs a key, so it becomes { error: "..." }.
+    # { err } is short for { err: err }. Written out in full it becomes
+    # { err: "..." }: the SAME key, because the code reading the response
+    # looks for that name.
     for use in uses:
         if use.type == "shorthand_property_identifier":
-            edits.append(TextEdit(file.path, use.start_byte, use.end_byte, f"error: {MESSAGE}".encode()))
+            edits.append(TextEdit(file.path, use.start_byte, use.end_byte, f"{text(use)}: {MESSAGE}".encode()))
 
     leaks = outermost_only([js_grow_leak(use) for use in uses if use.type == "identifier"])
     first_arg = (arguments(call) or [None])[0]
@@ -244,7 +268,11 @@ def js_chain_start(node: Node) -> Node:
 
 
 def js_status(call: Node) -> int | None:
-    """The HTTP status in  res.status(404).json(...),  or None if it isn't set."""
+    """The HTTP status in  res.status(404).json(...).
+
+    Returns the number, None if no status is set, or DYNAMIC if it's set
+    to something that isn't a plain number.
+    """
     # Walk back along the chain looking for .status(...) or .code(...).
     node = field(call, "function")
     while node is not None and node.type in ("member_expression", "call_expression"):
@@ -252,8 +280,8 @@ def js_status(call: Node) -> int | None:
             function = field(node, "function")
             is_status_call = text(field(function, "property")) in ("status", "code")
             args = arguments(node)
-            if is_status_call and args and text(args[0]).isdigit():
-                return int(text(args[0]))
+            if is_status_call and args:
+                return int(text(args[0])) if text(args[0]).isdigit() else DYNAMIC
             node = function
         else:
             node = field(node, "object")
@@ -261,9 +289,9 @@ def js_status(call: Node) -> int | None:
     # NextResponse.json(body, { status: 500 })
     args = arguments(call)
     if len(args) > 1 and args[1].type == "object":
-        match = re.search(r"\bstatus\s*:\s*(\d{3})", text(args[1]))
+        match = re.search(r"\bstatus\s*:\s*(\d{3}\b)?", text(args[1]))
         if match:
-            return int(match.group(1))
+            return int(match.group(1)) if match.group(1) else DYNAMIC
     return None
 
 
@@ -320,9 +348,19 @@ def param_name(param: Node | None) -> str | None:
     return None
 
 
-def js_already_logged(handler: Node) -> bool:
-    return any(node.type == "call_expression" and JS_LOGGER.match(text(field(node, "function")))
-               for node in walk(handler))
+def js_already_logged(handler: Node, error_name: str) -> bool:
+    """Is the ERROR ITSELF already being logged?
+
+    console.log("save failed") doesn't count: it leaves out what went
+    wrong. Once the response stops showing the error too, a log line that
+    includes it is the only place left to find the cause.
+    """
+    for node in walk(handler):
+        if node.type != "call_expression" or not JS_LOGGER.match(text(field(node, "function"))):
+            continue
+        if mentions(text(field(node, "arguments")), error_name):
+            return True
+    return False
 
 
 def js_statement(call: Node) -> Node | None:
@@ -363,9 +401,7 @@ PY_STRINGIFIERS = {"str", "repr", "format"}
 
 def check_python(file: SourceFile) -> list[Finding]:
     findings = []
-    for clause in walk(file.root):
-        if clause.type != "except_clause":
-            continue
+    for clause in file.nodes_of("except_clause"):
         error_name, catches_everything = except_details(clause)
         block = next((child for child in clause.children if child.type == "block"), None)
         if block is None:
@@ -394,13 +430,16 @@ def python_statement_finding(file: SourceFile, statement: Node, block: Node,
     if not catches_everything and not any(code >= 500 for code in statuses):
         return None  # a specific error, shown on purpose
 
-    # Step 4: replace the leaks and add logging.exception(...).
     line = line_of(statement)
     title = f"Error details sent to visitors ({error_name or 'traceback'})"
+    if python_status_is_dynamic(statement):
+        return manual(file, line, title, DYNAMIC_STATUS_NOTE)
+
+    # Step 4: replace the leaks and add logging.exception(...).
     leaks = outermost_only([python_grow_leak(use) for use in uses])
     edits = [TextEdit(file.path, leak.start_byte, leak.end_byte, MESSAGE.encode()) for leak in leaks]
 
-    if not python_already_logged(block):
+    if not python_already_logged(block, error_name):
         insert = insert_line_before(file, statement, 'logging.exception("Unhandled error")')
         if insert is None:
             return manual(file, line, title, "Put the except body on its own line, log with "
@@ -527,6 +566,39 @@ def status_codes(node: Node) -> list[int]:
     return [int(text(n)) for n in walk(node) if n.type == "integer" and re.fullmatch(r"[1-5]\d\d", text(n))]
 
 
-def python_already_logged(block: Node) -> bool:
-    return any(node.type == "call" and PY_LOGGER.match(text(field(node, "function")))
-               for node in own_nodes(block))
+def python_status_is_dynamic(statement: Node) -> bool:
+    """Is the status worked out while the app runs?
+
+    return jsonify(...), e.code                     (Flask)
+    raise HTTPException(status_code=e.status_code)  (FastAPI)
+    """
+    if statement.type == "return_statement" and statement.named_children:
+        returned = statement.named_children[0]
+        # `return body, status` is an expression_list of two or more parts.
+        if returned.type == "expression_list" and len(returned.named_children) >= 2 \
+                and returned.named_children[1].type != "integer":
+            return True
+    for node in own_nodes(statement):
+        if node.type == "keyword_argument" and text(field(node, "name")) in ("status", "status_code", "code"):
+            value = field(node, "value")
+            if value is not None and value.type != "integer":
+                return True
+    return False
+
+
+def python_already_logged(block: Node, error_name: str | None) -> bool:
+    """Is the ERROR ITSELF already being logged? (print("failed") doesn't count.)"""
+    for node in own_nodes(block):
+        if node.type != "call":
+            continue
+        function = text(field(node, "function"))
+        if not PY_LOGGER.match(function):
+            continue
+        whole_call = text(node)
+        # These record the error by themselves, without being handed it:
+        # logging.exception(...), traceback.print_exc(), exc_info=True.
+        records_it = function.endswith(".exception") or function.startswith(("traceback.", "sentry_sdk.")) \
+            or "exc_info" in whole_call
+        if records_it or (error_name is not None and mentions(text(field(node, "arguments")), error_name)):
+            return True
+    return False

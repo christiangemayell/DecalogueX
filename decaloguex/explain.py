@@ -108,6 +108,31 @@ EXPLANATIONS = {
         "This starts a job in the background, but nothing holds on to it, so it can be thrown away halfway through.",
         "I'll keep hold of the job until it's finished.",
     ),
+    "ASYNC-005": Explanation(
+        "💥", "One error could crash your whole app",
+        "This job is set up so that if it fails, nothing can catch the error, and the whole app crashes.",
+        "I'll change it so errors can be caught safely.",
+    ),
+    "ASYNC-006": Explanation(
+        "💥", "A background job could crash everything",
+        "If this background job crashes, it takes the whole program down with it, not just itself.",
+        "I'll add a safety net so a crash in the job stays inside the job.",
+    ),
+    "ASYNC-007": Explanation(
+        "⏳", "Background errors disappear without a trace",
+        "If this background job fails, the error is quietly thrown away, so you'd never know something broke.",
+        "I'll make sure any error gets printed so you can see it.",
+    ),
+    "ASYNC-008": Explanation(
+        "💥", "A background job could crash your app",
+        "This starts a job that runs on its own with no safety net, so one error inside it can crash the app.",
+        "I'll tell you how to give it a safety net.",
+    ),
+    "ASYNC-009": Explanation(
+        "⏳", "Background errors disappear without a trace",
+        "If this background job fails, the error is quietly thrown away, so you'd never know something broke.",
+        "I'll tell you how to catch and show the error.",
+    ),
 }
 
 # Used if a new rule is added without an explanation here yet.
