@@ -25,6 +25,7 @@ HOW IT CHECKS
 
 from __future__ import annotations
 
+import re
 import shutil      # shutil.which("git") finds a program on the PATH
 import subprocess  # runs other programs, like Java's ProcessBuilder
 from fnmatch import fnmatchcase  # shell-style wildcards: *.pem, .env.*
@@ -86,13 +87,33 @@ def check(root: Path, planned_files: set[Path]) -> list[Finding]:
     use_git = git_available(root)
 
     # GIT-002: already saved in Git. Ignoring won't help; it has to be untracked.
-    if use_git:
-        for rel in sorted(tracked_by_git(root, sensitive)):
+    tracked = tracked_by_git(root, sensitive) if use_git else set()
+    shared_templates = set()
+    for rel in sorted(tracked):
+        if not contains_secrets(root / rel) and SHARED_SETTINGS.search(Path(rel).name):
+            continue  # settings for tests or a CI service (.env.testing, .env.travis), shared on purpose
+        if not contains_secrets(root / rel) and not has_secret_settings(root / rel):
+            continue  # only public settings, like VITE_API_URL: nothing to protect
+        if not contains_secrets(root / rel):
+            # In Git on purpose with example values, like a starter .env full
+            # of "changethis". Adding it to .gitignore would do nothing (Git
+            # keeps tracking a file it already has), so say what WOULD help.
+            shared_templates.add(rel)
             findings.append(Finding(
-                "GIT-002", f"Secret file already uploaded to Git: {rel}", root / rel, 0,
-                impact="Ignoring it now won't remove it from GitHub's history. Revoke any keys inside it.",
-                note=f"Run: git rm --cached {rel}",
+                "GIT-001", f"{rel} is saved in Git, so .gitignore can't hide it", gitignore, 0,
+                impact="Real secrets you put in this file won't be uploaded to GitHub.",
+                severity=Severity.WARNING,
+                note=f"{rel} is saved in Git with example values, which is fine for now. But Git keeps "
+                     f"uploading a file it already tracks, even if .gitignore lists it. Before you put real "
+                     f"secrets in it, run  git rm --cached {rel}  and add {rel} to .gitignore. Share the "
+                     f"example values as {rel}.example instead.",
             ))
+            continue
+        findings.append(Finding(
+            "GIT-002", f"Secret file already uploaded to Git: {rel}", root / rel, 0,
+            impact="Ignoring it now won't remove it from GitHub's history. Revoke any keys inside it.",
+            note=f"Run: git rm --cached {rel}",
+        ))
 
     # GIT-001: exists (or will) but isn't covered by .gitignore.
     if use_git:
@@ -100,7 +121,8 @@ def check(root: Path, planned_files: set[Path]) -> list[Finding]:
     else:
         ignored = ignored_by_rules(root, sensitive)
     # Set difference: like Java's removeAll(), but it returns a new set.
-    unprotected = sorted(set(sensitive) - ignored)
+    # (Files Git already tracks were dealt with above: ignoring them does nothing.)
+    unprotected = sorted(set(sensitive) - ignored - tracked)
 
     if unprotected:
         patterns = patterns_for(unprotected)
@@ -142,9 +164,51 @@ def missing_gitignore_finding(gitignore: Path, sensitive: list[str]) -> Finding:
 # ===========================================================================
 
 def is_sensitive(name: str) -> bool:
-    if name in TEMPLATE_FILES:
+    if name in TEMPLATE_FILES or is_template_name(name):
         return False
     return any(fnmatchcase(name, wildcard) for wildcard, _ in SENSITIVE_FILES)
+
+
+# Settings files for automatic tests and CI services. Projects share these in
+# Git on purpose, with made-up values.
+SHARED_SETTINGS = re.compile(r"(?i)^\.env\.(?:test|testing|ci|travis|github|gitlab|dusk|e2e|cypress|playwright)(?:\.|$)")
+
+
+def is_template_name(name: str) -> bool:
+    """Templates come in many spellings: .env.example.docker, .env.sample.local..."""
+    return any(word in name.lower() for word in ("example", "sample", "template", ".dist"))
+
+
+def has_secret_settings(path: Path) -> bool:
+    """Does this file have settings NAMED like secrets (SECRET_KEY=..., DB_PASSWORD=...)?
+
+    A shared .env with  SECRET_KEY=changethis  is clearly meant to hold a real
+    secret one day. One with only  VITE_API_URL=...  isn't.
+    """
+    from decaloguex.rules import secrets  # imported here to avoid a circular import
+
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    names = [line.split("=", 1)[0].strip() for line in lines if "=" in line and not line.lstrip().startswith("#")]
+    return any(secrets.SECRET_NAME.search(name) for name in names)
+
+
+def contains_secrets(path: Path) -> bool:
+    """Does this file actually contain something that looks secret?
+
+    A .env file that's already in Git is only a problem if it holds a
+    secret. Many projects commit .env files with harmless settings on
+    purpose, like PORT=3000 or BROWSER=none.
+    """
+    from decaloguex.rules import config_files  # imported here to avoid a circular import
+
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return True  # can't read it: assume the worst, and report it
+    return any(config_files.check_line(path, number, line) for number, line in enumerate(lines, 1))
 
 
 def find_sensitive_files(root: Path, planned_files: set[Path]) -> list[str]:
@@ -169,8 +233,8 @@ def patterns_for(rel_paths: list[str]) -> list[str]:
         if any(fnmatchcase(name, wildcard) for name in names):
             patterns.append(line)
     if ".env.*" in patterns:
-        # The ! line must come AFTER .env.* so the template can still be saved.
-        patterns.append("!.env.example")
+        # The ! lines must come AFTER .env.* so templates can still be saved.
+        patterns += ["!.env.example", "!.env.*.example", "!.env.sample"]
     return patterns
 
 

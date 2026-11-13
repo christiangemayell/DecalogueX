@@ -171,3 +171,82 @@ def test_stats_are_sent_with_a_key(monkeypatch):
     assert payload["event"] == "scan_completed" and payload["properties"]["files_total"] == 3
     assert payload["properties"]["$process_person_profile"] is False
     assert payload["distinct_id"] == telemetry.install_id()  # the same random ID each time
+
+
+# --- Project ID, local log and test servers ------------------------------------
+
+def sent_payloads(monkeypatch):
+    """Switch stats on (with a test key) and collect what would be sent."""
+    monkeypatch.delenv("DECALOGUEX_TELEMETRY")
+    monkeypatch.setenv("DECALOGUEX_POSTHOG_KEY", "phc_test")
+    sent = []
+    monkeypatch.setattr(telemetry, "_post", lambda payload: sent.append(payload))
+    telemetry.take_notice()  # nothing is sent until the user has seen the notice
+    return sent
+
+
+def test_each_project_gets_its_own_lasting_id(tmp_path, monkeypatch):
+    sent = sent_payloads(monkeypatch)
+    shop, blog = tmp_path / "shop", tmp_path / "blog"
+    shop.mkdir()
+    blog.mkdir()
+    for root in (shop, shop, blog):
+        telemetry.send("scan_completed", {}, root=root)
+    telemetry.finish()
+    ids = [payload["properties"]["project_id"] for payload in sent]
+    assert ids[0] == ids[1] != ids[2]  # same project twice, then a different one
+    assert (shop / ".decaloguex" / "project-id").read_text(encoding="utf-8").strip() == ids[0]
+
+
+def test_everything_sent_is_written_to_a_local_log(tmp_path, monkeypatch):
+    sent = sent_payloads(monkeypatch)
+    telemetry.send("scan_completed", {"files_total": 3})
+    telemetry.finish()
+    [line] = telemetry.log_file().read_text(encoding="utf-8").splitlines()
+    entry = json.loads(line)
+    assert entry["event"] == "scan_completed" and entry["properties"]["files_total"] == 3
+    assert "api_key" not in entry and len(sent) == 1
+
+
+def test_stats_are_off_on_test_servers(monkeypatch):
+    monkeypatch.delenv("DECALOGUEX_TELEMETRY")
+    assert telemetry.is_enabled()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert not telemetry.is_enabled()
+
+
+# --- The "w" key: this looks wrong ----------------------------------------------
+
+def test_w_key_records_the_report_and_changes_nothing(tmp_path):
+    original = 'DB_PASSWORD = "hunter2!xyz"\n'
+    app = write(tmp_path, "app.py", original)
+    # one by one: "w" on the password, reason 1 (false alarm), then "n" to .gitignore
+    cli.run_scan(tmp_path, no_color=True, no_animation=True, ask=typing("o", "w", "1", "n"))
+
+    assert app.read_text(encoding="utf-8") == original
+    report = json.loads((tmp_path / ".decaloguex" / "blind-spots.json").read_text(encoding="utf-8"))
+    assert report["reported_wrong"] == [{"rule": "SEC-002", "file": "app.py", "line": 1, "reason": "false_alarm"}]
+
+
+def test_w_key_reports_are_counted_in_the_stats_without_file_names(tmp_path):
+    write(tmp_path, "secret_billing.py", 'DB_PASSWORD = "hunter2!xyz"\n')
+    result = engine.scan(tmp_path)
+    result.blind_spots.reported_wrong.append(
+        {"rule": "SEC-002", "file": "secret_billing.py", "line": 1, "reason": "bad_fix"})
+    stats = telemetry.scan_stats(result, "one")
+    assert stats["reported_wrong"] == {"SEC-002:bad_fix": 1}
+    assert "secret_billing" not in json.dumps(stats)
+
+
+# --- Free early access notice ------------------------------------------------------
+
+def test_early_access_notice_ends_every_scan(tmp_path, capsys):
+    write(tmp_path, "app.py", "print('hi')\n")
+    cli.run_scan(tmp_path, no_color=True, no_animation=True)
+    assert "free early access" in capsys.readouterr().out.strip().splitlines()[-1]
+
+
+def test_early_access_notice_is_in_the_json_report(tmp_path, capsys):
+    write(tmp_path, "app.py", "print('hi')\n")
+    cli.main(["scan", str(tmp_path), "--json"])
+    assert "free early access" in json.loads(capsys.readouterr().out)["notice"]

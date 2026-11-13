@@ -150,6 +150,8 @@ def check_javascript(file: SourceFile) -> list[Finding]:
         ]
         if not uses:
             continue
+        if status == DYNAMIC and status_comes_from_error(call, error_name):
+            continue
         if status == DYNAMIC:
             findings.append(manual(file, line_of(call), f"Error details sent to visitors ({error_name})",
                                    DYNAMIC_STATUS_NOTE))
@@ -265,6 +267,20 @@ def js_chain_start(node: Node) -> Node:
             break
         node = inner
     return node
+
+
+def status_comes_from_error(call: Node, error_name: str) -> bool:
+    """Is the status read straight from the error, with no fallback?
+
+        res.status(err.errorCode).json(err.message)
+
+    An error that carries its own status code was made on purpose by the
+    app (like HttpException(404, "Not found")), so its message is meant for
+    the visitor. With a fallback, res.status(err.status || 500), unknown
+    errors land on 500 and still leak, so those are still reported.
+    """
+    name = re.escape(error_name)
+    return re.search(rf"\.(?:status|code)\(\s*{name}\.\w+\s*\)", text(call)) is not None
 
 
 def js_status(call: Node) -> int | None:

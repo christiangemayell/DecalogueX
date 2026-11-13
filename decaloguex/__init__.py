@@ -10,3 +10,7 @@ static initializer block. Most packages leave it nearly empty.
 # The version string, readable from anywhere as decaloguex.__version__.
 # Keep it in sync with the version in pyproject.toml.
 __version__ = "0.2.0"
+
+# Shown at the end of every scan, and included in the --json report so AI
+# tools can pass it on. Change the wording here and it changes everywhere.
+EARLY_ACCESS_NOTICE = "DecalogueX is in free early access. The full version is coming soon."

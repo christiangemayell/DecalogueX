@@ -16,21 +16,113 @@ from pathlib import Path
 # generated output (dist, build), caches, and Git's own data.
 # A Python set literal {...} is like a Java HashSet; `in` checks are fast.
 SKIP_DIRS = {
+    # Version control and DecalogueX's own folder
     ".git",
+    ".decaloguex",
+    # Other people's code: downloaded libraries and tools
     "node_modules",
+    "bower_components",
+    "vendor",             # PHP (Composer), Go and Ruby keep downloaded libraries here
+    ".yarn",              # Yarn keeps a copy of itself here
+    "Pods",               # iOS libraries (CocoaPods)
+    ".bundle",            # Ruby
+    # Python environments
     ".venv",
     "venv",
     "env",
     "__pycache__",
+    # Generated output: built from the real code, so fixing it is pointless
     "dist",
     "build",
+    "out",
+    "target",             # Java and Kotlin builds
+    "obj",                # C# builds
+    ".gradle",
+    "DerivedData",        # Xcode builds
     ".next",
     ".nuxt",
     ".svelte-kit",
     ".turbo",
     ".cache",
-    ".decaloguex",
+    ".dart_tool",
+    "coverage",           # test-coverage reports
 }
+
+
+# ---------------------------------------------------------------------------
+# Test, example and generated files
+# ---------------------------------------------------------------------------
+#
+# Test files are full of made-up passwords and keys ON PURPOSE: a test for
+# "change password" needs a password to type. Rewriting them to read .env
+# would break the tests, and none of this code reaches real users. So test
+# and example files are only checked for REAL key formats (a live Stripe
+# key in a test is still a leak), and nothing in them is ever changed.
+
+# A folder with one of these names holds tests, test data or examples.
+TEST_FOLDERS = {
+    "test", "tests", "__tests__", "spec", "specs", "testdata", "test-data", "test_data",
+    "fixtures", "__fixtures__", "__mocks__", "mocks", "stubs", "factories", "seeders", "seeds",
+    "examples", "example", "samples", "sample", "e2e", "cypress", "playwright", "integration-tests",
+    # Settings for automatic testing services: their passwords are for throwaway test databases.
+    ".github", ".circleci", ".gitlab", ".buildkite",
+    # Speed tests, and apps used only while developing the project itself.
+    "benchmarks", "benchmark", "bench", "development",
+    # API documentation: its "tokens" are made-up examples for readers.
+    "swagger", "openapi",
+}
+
+# Folders of whole test or example projects:  jwt-auth-tests, chat-sample, api-examples
+TEST_FOLDER_ENDING = re.compile(r"(?i)[-_](?:tests?|samples?|examples?|demo)$")
+
+# Files that apps MUST ship, whose keys are public by design (Firebase config).
+# Only real key formats are reported there, like in tests (and never fixed).
+PUBLIC_CONFIG_FILES = {"google-services.json", "GoogleService-Info.plist", "firebase.json"}
+
+# A file whose name looks like one of these is a test.
+TEST_FILE_NAMES = re.compile(
+    r"(?:"
+    r"_test\.(?:go|py|rb|kt|swift)"             # gitea_test.go, test_app_test.py
+    r"|^test_\w+\.py|^conftest\.py"              # Python
+    r"|(?:Test|Tests|Spec|IT)\.(?:java|kt|cs|php|swift|scala)"  # UserTest.java, AppTests.cs
+    r"|\.(?:test|spec|cy|e2e)\.[cm]?[jt]sx?"    # app.test.js, auth.spec.ts
+    r"|_spec\.rb"                                # Ruby RSpec
+    r"|\.stories\.[jt]sx?"                       # Storybook examples
+    r"|^(?:Setup)?(?:Dummy|Fake|Seed)\w*\.\w+"     # SetupDummyAccount.php, SeedData.cs
+    r"|^seeds?\.\w+"                              # db/seeds.rb
+    r"|[-_.](?:samples?|examples?)\.\w+"           # application-secret-samples.yml, config.example.json
+    r"|^(?:development|test|testing|dev|local)\.(?:rb|py|exs|json|ya?ml|toml|ini)"  # config/environments/test.rb
+    r")$"
+)
+
+
+def is_test_or_example(rel_path: str) -> bool:
+    """Is this a test, test-data or example file? (rel_path uses / separators)"""
+    *folders, name = rel_path.split("/")  # all but the last part, then the last part
+    if any(folder.lower() in TEST_FOLDERS or TEST_FOLDER_ENDING.search(folder) for folder in folders):
+        return True
+    if name in PUBLIC_CONFIG_FILES:
+        return True  # Firebase's app config: its "API key" is public by design
+    return bool(TEST_FILE_NAMES.search(name))
+
+
+def looks_generated(path: Path, source: bytes) -> bool:
+    """Is this file minified or machine-generated, rather than written by a person?
+
+    Minified files squash a whole program onto a few enormous lines, e.g.
+    jquery.min.js. A person never edits them (they're rebuilt from the real
+    code), so "fixing" one would be pointless, and they're slow to read.
+    """
+    name = path.name.lower()
+    if ".min." in name or name.endswith((".bundle.js", ".chunk.js")):
+        return True
+    if len(source) < 5_000:
+        return False
+    lines = source.count(b"\n") + 1
+    longest = max((len(line) for line in source.split(b"\n")), default=0)
+    # Hand-written code has short lines. One line of 5,000+ characters, or an
+    # average over 500, means a machine wrote it.
+    return longest > 5_000 or len(source) / lines > 500
 
 
 def find_root(target: Path) -> Path:
@@ -92,6 +184,11 @@ class ProjectInfo:
     # The language families whose apps load a .env file when they start.
     # See "Does the app load its .env file?" at the bottom of this file.
     env_loaders: set[str] = field(default_factory=set)
+    # Does the app log visitors in with cookies (or sessions)? Found while
+    # scanning. CORS is only reported when it does (see rules/web.py).
+    cookie_logins: bool = False
+    # Has this Rails app switched off to_json's HTML escaping? (see rules/web.py)
+    rails_json_unescaped: bool = False
 
 
 def normalize_py_name(name: str) -> str:

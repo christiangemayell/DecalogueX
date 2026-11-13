@@ -13,7 +13,8 @@ them for you. Change your mind, and `decaloguex undo` puts everything back.
 It checks **JavaScript, TypeScript, Python, PHP, Java, C#, Go, Ruby, Kotlin,
 Swift, HTML, Vue and Svelte**, plus settings files like `.yml` and `.json`.
 
-It's free, and it's open source (MIT license).
+It's open source (MIT license), and this is a **free early-access version**:
+a full version is coming soon.
 
 ---
 
@@ -72,10 +73,11 @@ Type `A` and press Enter.
 ```
 decaloguex scan demo
 ```
-Everything that could be fixed is fixed. What's left is a **"What to do"**
-card, for the one problem that needs a human.
+It finds nothing left, and ends with the **DecalogueX approval stamp**.
 
-Run step 1 again any time to get a fresh broken app to practise on.
+Run step 1 again any time to get a fresh broken app to practise on. To also
+see a problem that only a human can fix (shown as a **"What to do"** card),
+use `python scripts/make_demo.py --manual` instead.
 
 > **Windows tip:** if `decaloguex` isn't recognised, type `.venv\Scripts\decaloguex` instead.
 
@@ -90,6 +92,11 @@ Run step 1 again any time to get a fresh broken app to practise on.
 | **SQL injection** (user input glued into database queries) | A hacker can type database commands into a form and read or delete your data | Rewrites the query the safe way |
 | **Error details shown to visitors** | Error messages can reveal file paths, database details and personal information | Shows visitors a friendly message and keeps the real error private |
 | **Async code with no safety net** | One failed database call can crash the whole server, or a job silently never runs | Adds the missing error handling |
+| **Debug mode left on** | Debug pages show hackers your code, settings and sometimes a live console | Turns it off for the public, keeps it on for you (Django, Flask) |
+| **Raw HTML put into a page** (XSS) | A hacker's text can run as code in your visitors' browsers and steal their logins | Escapes it (PHP `echo`), or tells you how |
+| **Any website allowed to call your server** (CORS `*`) | Other websites can use your visitors' logins against your server | Tells you how to allow only your own site |
+| **Security certificate check switched off** | Anyone on the same Wi-Fi can read and change the data you send | Tells you how to turn it back on |
+| **Whole form saved without picking fields** | A visitor can add `"isAdmin": true` to a form and make themselves admin | Tells you how to save only the fields you expect |
 
 **It never guesses.** If it can't be sure a fix is safe, it changes nothing
 and tells you exactly what to do yourself, in a **"What to do"** card.
@@ -107,12 +114,22 @@ yet are listed under **BLIND SPOTS** at the end of every scan, and saved in
 | PHP | ✔ fixed | ✔ fixed (PDO) | ✔ fixed | not needed |
 | Go | ✔ fixed | ✔ fixed | ✔ fixed | ✔ fixed |
 | Ruby | ✔ fixed | ✔ fixed (ActiveRecord) | ✔ fixed | not needed |
-| C# | ✔ fixed | instructions | ✔ fixed | ✔ fixed |
-| Java | ✔ fixed | instructions | ✔ fixed | ✔ fixed |
-| Kotlin | ✔ fixed | instructions | ✔ fixed | instructions |
-| Swift | ✔ fixed | instructions | ✔ fixed | instructions |
+| C# | ✔ fixed | ✔ fixed (EF Core, Dapper) | ✔ fixed | ✔ fixed |
+| Java | ✔ fixed | ✔ fixed (JdbcTemplate) | ✔ fixed | ✔ fixed |
+| Kotlin | ✔ fixed | ✔ fixed (JdbcTemplate) | ✔ fixed | ✔ fixed |
+| Swift | ✔ fixed | instructions | ✔ fixed | ✔ fixed |
 | HTML / Vue / Svelte | instructions* | ✔ fixed | n/a | ✔ fixed |
-| Settings files (.yml, .json...) | instructions | n/a | n/a | n/a |
+| Settings files (.yml, .json...) and scripts (.sh, .ps1...) | instructions | n/a | n/a | n/a |
+
+Razor (`.cshtml`, `.razor`) and ERB (`.erb`) pages are checked like HTML.
+Test, example and fixture files are only checked for real-looking keys, and
+never changed. Generated and minified files are skipped. Both are listed
+under BLIND SPOTS.
+
+**Every fix is build-tested.** `tests/test_builds.py` lets DecalogueX fix a
+broken program in each language, then builds it with the real Go, PHP,
+Ruby, Java, C#, Kotlin and Swift tools. If a language's tool isn't installed,
+that test is skipped.
 
 \* A key in a web page runs in the visitor's browser, so `.env` can't hide it.
 DecalogueX explains how to move it to your server instead. The same goes for
@@ -153,6 +170,19 @@ You can also press **F5** in VS Code to run a scan step by step in the debugger.
 
 ---
 
+### Silence a finding you've checked
+
+If DecalogueX flags a line and you've looked at it and you're sure it's fine,
+add a comment with `decaloguex-ignore` on that line or the line above:
+
+```js
+// decaloguex-ignore
+el.innerHTML = bundledIcon;
+```
+
+DecalogueX also respects the markers other tools use, like `nosemgrep`,
+`NOSONAR`, `# nosec` and `rubocop:disable Rails/OutputSafety`.
+
 ## Privacy
 
 DecalogueX sends **anonymous usage stats** so it can be improved: things like
@@ -162,8 +192,23 @@ time you run it, and nothing at all is sent on that first run.
 
 - **Never sent:** your code, file or folder names, project names, secrets,
   error messages, or anything that identifies you.
+- **See exactly what was sent:** everything is also written to a log on your
+  own computer, at `~/.decaloguex/telemetry.log`. `decaloguex telemetry`
+  shows where it is.
+- **Projects are counted, not identified:** each project gets a random code,
+  kept in its `.decaloguex` folder, so DecalogueX can count how many
+  projects use it each week. The code says nothing about the project.
 - **Switch it off any time:** `decaloguex telemetry off`
-- It's also off automatically if you've set `DO_NOT_TRACK=1`.
+- It's also off automatically if you've set `DO_NOT_TRACK=1`, and on
+  automated test servers (CI).
+
+### Tell us when it's wrong
+
+When you go through fixes one by one (**O**), press **w** on any finding
+that looks wrong: a false alarm, or a fix that doesn't look right. Nothing
+gets changed, the finding is noted in `.decaloguex/blind-spots.json`, and
+an anonymous count (the rule and the reason, never your code) helps make
+DecalogueX more accurate.
 
 The full list of what's sent is at the top of `decaloguex/telemetry.py`.
 
@@ -216,6 +261,7 @@ A good order to read the program in:
 | 7 | `decaloguex/rules/sql.py` | Fixes SQL injection (long, because every database works a bit differently) |
 | 8 | `decaloguex/rules/other_languages.py` | The same rules for PHP, Java, C#, Go, Ruby, Kotlin and Swift, using one "profile" per language |
 | 9 | `decaloguex/rules/config_files.py` | Secrets in settings files |
+| 9b | `decaloguex/rules/web.py` | Website mistakes: debug mode, XSS, CORS, certificates, mass assignment |
 | 10 | `decaloguex/engine.py` | Runs all the rules and saves the fixes safely |
 | 11 | `decaloguex/cli.py` | The `decaloguex` command you type, step by step |
 | 12 | `decaloguex/ui.py` | Everything on screen: the animations, problem cards and questions |
@@ -292,8 +338,16 @@ Each problem in the report has an ID, so you can look it up here.
 | ASYNC-005 | A C# `async void` method (an error crashes the whole app) |
 | ASYNC-006 | A Go goroutine with no `recover()` (a panic crashes the whole program) |
 | ASYNC-007 | A Java `CompletableFuture` whose errors are silently lost |
-| ASYNC-008 | A Kotlin `GlobalScope.launch` with no error handler (reported only) |
-| ASYNC-009 | A Swift `Task` whose errors are silently lost (reported only) |
+| ASYNC-008 | A Kotlin `GlobalScope.launch` with no error handler |
+| ASYNC-009 | A Swift `Task` whose errors are silently lost |
+| DEBUG-001 | Debug mode left on (fixed for Django and Flask) |
+| XSS-001 | Raw HTML put into a web page (fixed for PHP `echo`) |
+| CORS-001 | Any website allowed to call your server (reported only) |
+| TLS-001 | Security certificate check switched off (reported only) |
+| MASS-001 | A whole form saved without picking fields (reported only) |
+| SEC-004 | A backup secret anyone can guess, like `process.env.JWT_SECRET \|\| 'superSecret'` |
+| AUTH-001 | An owner check that lets logged-out visitors through (reported only) |
+| AUTH-002 | Anyone logged in can change or delete anyone's data (reported only) |
 
 </details>
 

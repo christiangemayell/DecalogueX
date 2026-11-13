@@ -2,7 +2,10 @@
 make_demo.py: builds a small "vibe-coded" app full of mistakes, to try
 DecalogueX on.
 
-    python scripts/make_demo.py
+    python scripts/make_demo.py            every problem can be fixed: press A,
+                                           and it ends with the approval stamp
+    python scripts/make_demo.py --manual   also adds a problem only a human can
+                                           fix, to show a "What to do" card
     decaloguex scan demo
 
 It writes into demo/, which .gitignore excludes. The fake keys are assembled
@@ -12,8 +15,10 @@ scanner.
 Run it again any time to reset the demo after DecalogueX has fixed it.
 """
 
+import os
 import shutil
 import subprocess
+import sys  # sys.argv is the list of words typed after the command, like main(String[] args)
 from pathlib import Path
 
 # __file__ is this script's own path. .parent twice goes up from scripts/ to
@@ -159,12 +164,17 @@ func orderHandler(w http.ResponseWriter, r *http.Request) {
 \tfmt.Fprintln(w, rows)
 }
 """,
-    # A settings file with a password in it (reported with instructions).
-    "config.yml": "database:\n  host: localhost\n  password: Sup3rS3cretPass!\n",
     # A language DecalogueX can't read yet: it shows up under BLIND SPOTS.
     "legacy.rs": "fn main() {\n    println!(\"old billing code\");\n}\n",
     # A local .env-style file that is NOT protected by any .gitignore yet.
     ".env.local": "SESSION_SECRET=local-dev-secret-123\n",
+}
+
+# Only added with --manual: a settings file with a password in it. DecalogueX
+# reports it with instructions but can't fix it by itself, so the demo then
+# ends with "Not approved yet" until you delete that line by hand.
+MANUAL_FILES = {
+    "config.yml": "database:\n  host: localhost\n  password: Sup3rS3cretPass!\n",
 }
 
 
@@ -172,7 +182,10 @@ def main() -> None:
     if DEMO.exists():
         shutil.rmtree(DEMO)  # delete the old demo folder (like rm -rf)
     DEMO.mkdir()
-    for name, content in FILES.items():
+    with_manual = "--manual" in sys.argv
+    # {**a, **b} joins two dicts into one, like calling putAll() twice in Java.
+    files = {**FILES, **MANUAL_FILES} if with_manual else FILES
+    for name, content in files.items():
         (DEMO / name).write_text(content, encoding="utf-8")
 
     # Make the demo its own Git repo. DecalogueX treats the nearest folder with
@@ -182,7 +195,14 @@ def main() -> None:
         subprocess.run(["git", "init", "--quiet"], cwd=DEMO, check=False)
 
     print(f"Demo app created in {DEMO}")
-    print("Now run:  decaloguex scan demo")
+    if with_manual:
+        print("It includes one problem only you can fix (a password in config.yml).")
+    else:
+        print("Every problem in it can be fixed automatically: choose A for the full show.")
+    # On Windows the command lives in .venv\Scripts unless the venv is switched on.
+    command = r".venv\Scripts\decaloguex" if os.name == "nt" else "decaloguex"
+    print(f"Now run:  {command} scan demo")
+    print("When it asks what to do, type A and press Enter.")
 
 
 # This block runs only when the file is executed directly, not when it's

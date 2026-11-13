@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from decaloguex import __version__, blindspots, engine, project, telemetry, ui, undo
+from decaloguex import EARLY_ACCESS_NOTICE, __version__, blindspots, engine, project, telemetry, ui, undo
 from decaloguex.explain import explain
 
 
@@ -151,7 +151,11 @@ def _run(screen: ui.Screen, target: Path, assume_yes: bool, dry_run: bool, ask: 
         if choice == "all":
             chosen = fixable
         elif choice == "one":
-            chosen = ui.ask_each(screen, ask, fixable, result.root)
+            chosen, reported_wrong = ui.ask_each(screen, ask, fixable, result.root)
+            if reported_wrong:
+                # Save the "this looks wrong" reports with the other blind spots.
+                result.blind_spots.reported_wrong += reported_wrong
+                blindspots.save(result.root, result.blind_spots)
         else:
             chosen = []
 
@@ -194,11 +198,14 @@ def add_required_protection(screen: ui.Screen, chosen: list, fixable: list) -> l
 
 
 def finish_scan(screen: ui.Screen, result, choice: str, chosen=(), applied=(), rejected=()) -> None:
-    """The last steps of every scan: send the usage stats, and show the one-time notice."""
-    telemetry.send("scan_completed", telemetry.scan_stats(result, choice, chosen, applied, rejected))
+    """The last steps of every scan: send the usage stats, show the one-time
+    stats notice, and end with the early-access line."""
+    telemetry.send("scan_completed", telemetry.scan_stats(result, choice, chosen, applied, rejected),
+                   root=result.root)
     notice = telemetry.take_notice()
     if notice:
         ui.show_notice(screen, notice)
+    ui.show_early_access(screen)
 
 
 # ===========================================================================
@@ -234,11 +241,17 @@ def run_json(target: Path, assume_yes: bool = False) -> int:
         "blind_spots": result.blind_spots.to_dict(),
         "fixes_applied": len(applied),
         "undo": "decaloguex undo" if applied else None,
+        # AI tools are asked (in SKILL.md) to pass this on to the user once.
+        "notice": EARLY_ACCESS_NOTICE,
     }
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    # ensure_ascii=True writes characters like "…" as …, so the report
+    # is plain ASCII. Otherwise, on Windows, a report saved to a file came out
+    # in the old cp1252 encoding, which other programs (and AI tools) can't read.
+    print(json.dumps(report, indent=2, ensure_ascii=True))
 
     telemetry.send("scan_completed", telemetry.scan_stats(result, "yes" if assume_yes else "json",
-                                                          fixable if assume_yes else (), applied, rejected))
+                                                          fixable if assume_yes else (), applied, rejected),
+                   root=result.root)
     notice = telemetry.take_notice()
     if notice:
         print(notice, file=sys.stderr)  # stderr, so it never breaks the JSON on stdout
@@ -295,7 +308,7 @@ def run_undo(target: Path, assume_yes: bool = False, no_color: bool = False, ask
 
     restored = undo.restore(plan)
     ui.show_undo_done(screen, restored, plan.created)
-    telemetry.send("undo_used", {"files_restored": len(restored)})
+    telemetry.send("undo_used", {"files_restored": len(restored)}, root=root)
     return 0
 
 
@@ -307,5 +320,6 @@ def run_telemetry(setting: str) -> int:
     screen = ui.setup_screen()
     if setting in ("on", "off"):
         telemetry.set_enabled(setting == "on")
-    ui.show_telemetry_status(screen, telemetry.is_enabled(), telemetry.will_send())
+    ui.show_telemetry_status(screen, telemetry.is_enabled(), telemetry.will_send(),
+                             log=telemetry.log_file(), in_ci=telemetry.running_in_ci())
     return 0

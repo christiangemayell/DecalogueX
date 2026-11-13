@@ -46,6 +46,7 @@ from tree_sitter import Node
 from decaloguex.languages import SourceFile, ancestors, arguments, field, items, line_of, text, walk
 from decaloguex.models import Finding, Fix, Severity, TextEdit
 from decaloguex.project import ProjectInfo
+from decaloguex.rules import secrets
 from decaloguex.rules.common import (
     indent_at,
     js_imported_modules,
@@ -288,7 +289,36 @@ def own_nodes(root: Node, function_types: set[str]):
 # ASYNC-002: .then() with no .catch()
 # ===========================================================================
 
+# Signs that a JavaScript file runs on a SERVER (Node.js), not in a browser:
+# loading Node's own modules or server libraries, reading process.env, or
+# a Next.js API route (export async function GET).
+SERVER_SIGNS = re.compile(
+    rb"""\brequire\(\s*['"]"""
+    rb"""|\bfrom\s+['"](?:node:|fs|path|os|http|https|child_process|express|fastify|koa|hono|"""
+    rb"""@nestjs/|mongoose|pg|mysql2?|@prisma/|sqlite3|better-sqlite3|redis|ioredis)['"/]"""
+    rb"""|\bprocess\.(?:env|exit|on|argv)\b|\bmodule\.exports\b"""
+    rb"""|\bexport\s+(?:async\s+)?function\s+(?:GET|POST|PUT|PATCH|DELETE)\b"""
+)
+
+
+def runs_on_server(file: SourceFile) -> bool:
+    """Does this JavaScript run on a server, where an unhandled error can crash it?
+
+    In a visitor's browser, a promise without .catch() only prints a
+    warning in the browser's console. Testing on real projects found
+    over a hundred such "problems" in one website's front end, so the
+    rule only applies where it really matters: on the server.
+    """
+    if file.lang.embedded:
+        return False  # a <script> in a web page
+    if secrets.USE_CLIENT.search(file.source) or secrets.BROWSER_ONLY.search(file.source):
+        return False  # marked as browser code, or uses things only a browser has
+    return bool(SERVER_SIGNS.search(file.source))
+
+
 def check_missing_catch(file: SourceFile) -> list[Finding]:
+    if not runs_on_server(file):
+        return []
     handler = ".catch((err) => console.error(err))"
     findings = []
     for node in file.nodes_of("expression_statement"):

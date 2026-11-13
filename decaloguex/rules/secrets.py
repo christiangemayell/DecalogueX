@@ -80,7 +80,7 @@ def known_key_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, i
     """SEC-001 / SEC-003: the string matches a known key format."""
     for pattern in KNOWN_PATTERNS:
         match = pattern.regex.search(literal.value)
-        if match is None:
+        if match is None or obviously_fake(match.group(0)):
             continue
         title = f"Exposed {pattern.label}"
         line = line_of(literal.node)
@@ -111,10 +111,36 @@ def secret_name_finding(file: SourceFile, literal: Literal, planner: EnvPlanner,
         return None  # e.g. TOKEN_URL holds a URL, not a token
     if not looks_like_secret(literal.value) or not literal.rewritable:
         return None
+    if public_by_design(file, literal.node):
+        return None
 
     kind = "password" if re.search(r"passw|pwd", name, re.IGNORECASE) else "secret"
     return fixable_finding(file, literal, planner, in_browser, "SEC-002", f"Hard-coded {kind} in '{name}'",
                            env_name=to_env_name(name), shown=mask(literal.value, reveal=False))
+
+
+# Services whose "API keys" are MEANT to be public: they go in the web page
+# and only allow safe things (searching, or connecting to your own app).
+#   Algolia search keys, Firebase web config, PostHog/Mapbox public tokens...
+PUBLIC_KEY_SERVICES = re.compile(
+    rb"(?i)algolia|docsearch|firebase|authDomain|messagingSenderId|posthog|mapbox|publishable|recaptcha|sitekey")
+
+
+def public_by_design(file: SourceFile, node: Node) -> bool:
+    """Is this key in the settings of a service whose keys are public?
+
+    Looks at the few lines around it, e.g. koel's docs:
+        search: { provider: 'algolia', options: { appId: '...', apiKey: '...' } }
+    """
+    source = file.source
+    start = node.start_byte
+    for _ in range(4):  # back up four lines
+        start = source.rfind(b"\n", 0, max(start - 1, 0)) + 1
+    end = node.end_byte
+    for _ in range(4):  # and forward four
+        found = source.find(b"\n", end + 1)
+        end = len(source) if found == -1 else found
+    return PUBLIC_KEY_SERVICES.search(source[start:end]) is not None
 
 
 def fixable_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, in_browser: bool,
@@ -203,8 +229,12 @@ def without_fixes_the_app_cannot_load(findings: list[Finding], env_loaders: set[
     result = []
     for finding in findings:
         language = languages.detect(finding.path)
-        is_secret_fix = finding.rule_id.startswith("SEC") and finding.fix is not None and language is not None
-        if is_secret_fix and language.family not in env_loaders:
+        # Any fix that relies on .env: moved secrets, and debug mode read from .env.
+        uses_env = finding.fix is not None and (
+            any(a.path.name == ".env" for a in finding.fix.appends)
+            # A removed backup secret relies on the real one being set, from .env or elsewhere.
+            or finding.rule_id == "SEC-004")
+        if uses_env and language is not None and language.family not in env_loaders:
             finding = Finding(finding.rule_id, finding.title, finding.path, finding.line, finding.impact,
                               finding.severity, note=ENV_LOADING_HELP[language.family])
         result.append(finding)
@@ -229,6 +259,15 @@ class SecretPattern:
 # (?<![0-9A-Za-z]) at the start means "not right after a letter or digit".
 # Without it, ordinary words would match: "task-management-dashboard"
 # contains "sk-management-dashboard", which looks like an OpenAI key.
+# Made-up keys used in documentation and tests: Amazon's own example key
+# AKIAIOSFODNN7EXAMPLE, or ghp_abcdefghijklmnopqrstuvwxyz1234567890.
+FAKE_KEY = re.compile(r"EXAMPLE|abcdefghij|ABCDEFGHIJ|1234567890|0123456789|(.)\1{9}|x{6}|X{6}")
+
+
+def obviously_fake(key: str) -> bool:
+    return FAKE_KEY.search(key) is not None
+
+
 KNOWN_PATTERNS = [
     SecretPattern("Stripe secret key", "STRIPE_SECRET_KEY",
                   re.compile(r"(?<![0-9A-Za-z])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
@@ -249,7 +288,10 @@ KNOWN_PATTERNS = [
     SecretPattern("Slack token", "SLACK_TOKEN",
                   re.compile(r"xox[abposr]-[0-9A-Za-z\-]{10,}")),
     SecretPattern("private key", "PRIVATE_KEY",
-                  re.compile(r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----"), fixable=False),
+                  # The header PLUS a long block of random characters: a header
+                  # followed by "..." or "invalid" is a placeholder or a test.
+                  re.compile(r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----(?:\s|\\n|\\r)*[A-Za-z0-9+/=]{40,}"),
+                  fixable=False),
 ]
 
 # A variable whose name contains one of these probably holds a secret.
@@ -272,6 +314,12 @@ PLACEHOLDER = re.compile(
 )
 
 
+def fingerprint_of(value: str) -> str:
+    """A one-way scramble of a secret, used only to spot the same secret twice."""
+    import hashlib
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
 def looks_like_secret(value: str) -> bool:
     """Filter out values that are clearly NOT secrets."""
     if len(value) < 8:
@@ -284,21 +332,46 @@ def looks_like_secret(value: str) -> bool:
         return False                          # an env-var NAME like "STRIPE_KEY"
     if PLACEHOLDER.search(value):
         return False                          # "your-key-here"
-    if all(letter.isalpha() or letter in "_-." for letter in value):
+    if not value.isascii():
+        return False                          # text in another language, like "パスワード"
+    if all(letter.isalpha() or letter in "_-.:/," for letter in value):
         # Only letters and separators: a WORD or a NAME, not a secret.
         #   labels          { password: "Password" }
         #   storage names   TOKEN_KEY = "auth_token"
+        #   permissions     AccessTokenScopeReadUser = "read:user"
         # Real secrets are random, so they nearly always contain a digit or
         # a symbol. (This lets a weak all-letters password through, but
         # "moving" a label to .env would break the page it's shown on.)
         return False
     if VALIDATION_RULE.search(value):
         return False                          # Laravel: 'password' => 'required|min:8'
+    if REFERENCE.match(value):
+        return False                          # points to a secret stored elsewhere: $DB_PASSWORD
+    if PASSWORD_HASH.match(value):
+        return False                          # a scrambled password ("hash"), not the password itself
+    if REGEX_LIKE.search(value):
+        return False                          # a text-matching pattern: yearToken = `\b\d{4}\b`
+    if VERSION_LIKE.search(value):
+        return False                          # a library and its version: io.jsonwebtoken:jjwt-api:0.11.2
     return len(set(value)) > 2                # "xxxxxxxx", "00000000"
 
 
 # Words that form-validation rules are made of.
 VALIDATION_RULE = re.compile(r"\b(?:required|nullable|sometimes|confirmed)\b")
+
+# A REFERENCE to a secret stored somewhere else, which is exactly right:
+#   $DB_PASSWORD   ${SECRET}   %API_KEY%   {{ secrets.TOKEN }}
+REFERENCE = re.compile(r"^(?:\$\{?[A-Za-z_]\w*\}?(?::\S*)?|%[A-Za-z_]\w*%|\{\{.*\}\})$")
+
+# Ends in a version number, like a library name:  jjwt-jackson:0.11.2   lodash@4.17.21
+VERSION_LIKE = re.compile(r"[:@/v-]\d+\.\d+\.\d+(?:[-.][\w.]+)?['\",]*$")
+
+# Text-matching patterns (regular expressions) use these; passwords don't.
+REGEX_LIKE = re.compile(r"\\[bdswBDSW]|\(\?[:=!<]|\[\^|\{\d+(?:,\d*)?\}|\.\*|\.\+")
+
+# Password hashes: one-way scrambles that can't be turned back into the
+# password. Apps store THESE in databases on purpose (bcrypt, argon2...).
+PASSWORD_HASH = re.compile(r"^\$(?:2[abxy]|argon2(?:id|i|d)|pbkdf2[\w-]*|scrypt)\$")
 
 
 def to_env_name(name: str) -> str:

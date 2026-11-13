@@ -10,8 +10,16 @@ So every scan keeps track of its blind spots and shows them openly:
                 stop. The rest of the scan carries on; these show where a
                 rule needs improving.
   too_big       files too large to check quickly (usually generated code).
+  generated     minified or machine-generated files (like app.min.js). People
+                don't edit these, so they aren't checked or changed.
+  test_files    how many test, test-data and example files were found. These
+                are only checked for REAL key formats, and never changed:
+                they're full of made-up passwords on purpose.
   manual        problems DecalogueX found but can't fix safely, by rule
                 ("SQL-001: 3"). These show where an automatic fix is worth adding.
+  reported_wrong  findings the USER marked as wrong (the "w" key): a false
+                alarm, or a fix that looks wrong. Only a person can spot
+                these, and they show exactly which rule needs improving.
 
 The report is saved in the project as .decaloguex/blind-spots.json so you
 can look back at it, and (as anonymous counts only) it's part of the usage
@@ -32,9 +40,10 @@ UNSUPPORTED_CODE = {
     ".dart": "Dart", ".scala": "Scala", ".lua": "Lua", ".pl": "Perl", ".r": "R",
     ".m": "Objective-C", ".mm": "Objective-C", ".ex": "Elixir", ".exs": "Elixir",
     ".erl": "Erlang", ".hs": "Haskell", ".clj": "Clojure", ".groovy": "Groovy",
-    ".sh": "Shell", ".bash": "Shell", ".ps1": "PowerShell", ".astro": "Astro",
+    ".astro": "Astro",
     ".fs": "F#", ".vb": "Visual Basic", ".jl": "Julia", ".zig": "Zig", ".sol": "Solidity",
-    ".cshtml": "Razor", ".erb": "Ruby templates", ".blade.php": "Blade templates",
+    # (Shell and PowerShell scripts are checked for secrets in config_files.py,
+    #  and Razor/ERB page templates are checked like HTML pages.)
 }
 
 MAX_FILE_SIZE = 2_000_000  # bytes. Bigger files are skipped (and listed as a blind spot).
@@ -48,20 +57,28 @@ class BlindSpots:
     tripped: list[dict] = field(default_factory=list)          # {"path", "rule", "error"} per problem
     too_big: list[str] = field(default_factory=list)           # relative paths
     manual: Counter = field(default_factory=Counter)           # rule ID -> number of findings
+    # {"rule", "file", "line", "reason"} for each finding the user marked as wrong
+    reported_wrong: list[dict] = field(default_factory=list)
+    generated: list[str] = field(default_factory=list)         # relative paths
+    test_files: int = 0
 
     def is_empty(self) -> bool:
-        return not (self.unsupported or self.tripped or self.too_big or self.manual)
+        return not (self.unsupported or self.tripped or self.too_big or self.manual or self.reported_wrong
+                    or self.generated or self.test_files)
 
     def files_not_checked(self) -> int:
         tripped_files = {t["path"] for t in self.tripped}
-        return sum(self.unsupported.values()) + len(self.too_big) + len(tripped_files)
+        return sum(self.unsupported.values()) + len(self.too_big) + len(self.generated) + len(tripped_files)
 
     def to_dict(self) -> dict:
         return {
             "unsupported_languages": dict(self.unsupported.most_common()),
             "tripped": self.tripped,
             "too_big": self.too_big,
+            "generated": self.generated,
+            "test_files_only_checked_for_real_keys": self.test_files,
             "manual_steps_by_rule": dict(sorted(self.manual.items())),
+            "reported_wrong": self.reported_wrong,
         }
 
 

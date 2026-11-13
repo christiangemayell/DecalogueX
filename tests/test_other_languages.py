@@ -194,13 +194,13 @@ def test_constants_are_not_rewritten(tmp_path):
 # --- Web pages ------------------------------------------------------------------
 
 def test_vue_script_is_checked(tmp_path):
-    page = write(tmp_path, "App.vue",
-                 "<template><div>{{ total }}</div></template>\n"
-                 "<script setup>\n"
-                 'fetch("/api").then((r) => r.json()).then(show)\n'
-                 "</script>\n")
-    fix(tmp_path)
-    assert '.then(show).catch((err) => console.error(err))' in page.read_text(encoding="utf-8")
+    write(tmp_path, "App.vue",
+          "<template><div>{{ total }}</div></template>\n"
+          "<script setup>\n"
+          f'const stripe = Stripe("{STRIPE}")\n'
+          "</script>\n")
+    [finding] = [f for f in engine.scan(tmp_path).findings if f.rule_id == "SEC-001"]
+    assert finding.line == 3 and "browser" in finding.note
 
 
 def test_key_in_browser_code_gets_honest_advice(tmp_path):

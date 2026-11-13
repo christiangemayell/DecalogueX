@@ -38,7 +38,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from decaloguex import __version__, scenes
+from decaloguex import EARLY_ACCESS_NOTICE, __version__, scenes
 from decaloguex.explain import explain
 from decaloguex.models import Finding, Severity
 
@@ -413,28 +413,45 @@ def ask_how(screen: Screen, ask: Ask, count: int) -> str:
     return "none"
 
 
-def ask_each(screen: Screen, ask: Ask, fixable: list[Finding], root: Path) -> list[Finding]:
-    """Go through the fixes one at a time and return the ones the user wants."""
+# The reasons a user can give with the "w" key: (what they type, saved as, shown as)
+WRONG_REASONS = [
+    ("1", "false_alarm", "Not actually a problem"),
+    ("2", "bad_fix", "The fix looks wrong"),
+    ("3", "other", "Something else"),
+]
+
+
+def ask_each(screen: Screen, ask: Ask, fixable: list[Finding], root: Path) -> tuple[list[Finding], list[dict]]:
+    """Go through the fixes one at a time.
+
+    Returns (the findings to fix, the findings the user marked as wrong).
+    A finding marked as wrong is skipped, and recorded for the blind spots
+    report, so the rule behind it can be improved.
+    """
     screen.say()
-    screen.say(screen.dim("    y = fix it    n = skip it    a = fix this one and all the rest    q = skip the rest"))
+    screen.say(screen.dim("    y = fix it    n = skip it    a = fix this and all the rest    "
+                          "q = skip the rest    w = this looks wrong"))
     chosen = []
+    reported_wrong = []
     for number, finding in enumerate(fixable, start=1):
         info = explain(finding.rule_id)
         screen.say()
         screen.say(f"  {screen.cyan(f'{number}/{len(fixable)}')}  {info.icon}  {screen.bold(info.headline)}  "
                    f"{screen.dim('(' + where(finding, root) + ')')}")
         answer = ""
-        while answer not in ("y", "n", "a", "q"):
-            answer = screen.ask(ask, screen.cyan("      Fix it? (y/n/a/q) ")) or "n"
-            answer = {"yes": "y", "no": "n", "all": "a", "quit": "q"}.get(answer, answer)
-            if answer not in ("y", "n", "a", "q"):
-                screen.say(screen.dim("      Type y, n, a or q."))
+        while answer not in ("y", "n", "a", "q", "w"):
+            answer = screen.ask(ask, screen.cyan("      Fix it? (y/n/a/q/w) ")) or "n"
+            answer = {"yes": "y", "no": "n", "all": "a", "quit": "q", "wrong": "w"}.get(answer, answer)
+            if answer not in ("y", "n", "a", "q", "w"):
+                screen.say(screen.dim("      Type y, n, a, q or w."))
 
         if answer == "y":
             chosen.append(finding)
             screen.say(screen.mint("      ✔ Will fix"))
         elif answer == "n":
             screen.say(screen.dim("      – Skipped"))
+        elif answer == "w":
+            reported_wrong.append(ask_what_is_wrong(screen, ask, finding, root))
         elif answer == "a":
             chosen += fixable[number - 1:]  # this one and everything after it
             screen.say(screen.mint(f"      ✔ Will fix this and the {len(fixable) - number} after it"))
@@ -442,7 +459,23 @@ def ask_each(screen: Screen, ask: Ask, fixable: list[Finding], root: Path) -> li
         else:  # "q"
             screen.say(screen.dim("      – Skipping the rest"))
             break
-    return chosen
+    return chosen, reported_wrong
+
+
+def ask_what_is_wrong(screen: Screen, ask: Ask, finding: Finding, root: Path) -> dict:
+    """The "w" key: ask what's wrong with this finding, and record the answer."""
+    choices = "   ".join(f"[{key}] {label}" for key, _, label in WRONG_REASONS)
+    screen.say(screen.dim(f"      What's wrong?  {choices}"))
+    reasons = {key: reason for key, reason, _ in WRONG_REASONS}
+    answer = screen.ask(ask, screen.cyan("      ➜ "))
+    reason = reasons.get(answer, "other")  # anything unexpected counts as "other"
+    screen.say(screen.amber("      ✎ Noted in the blind spots report, and not changed. "
+                            "Thanks, this helps improve DecalogueX."))
+    try:
+        file = finding.path.relative_to(root).as_posix()
+    except ValueError:
+        file = finding.path.name
+    return {"rule": finding.rule_id, "file": file, "line": finding.line, "reason": reason}
 
 
 # ===========================================================================
@@ -559,18 +592,28 @@ def show_summary(screen: Screen, total: int, applied: list[Finding], rejected: l
 def show_blind_spots(screen: Screen, spots) -> None:
     """Say plainly what DecalogueX could NOT check. Hiding it would be dishonest."""
     not_checked = spots.files_not_checked()
-    if not not_checked:
+    if not not_checked and not spots.test_files:
         return
+
+    def plural(count: int, word: str) -> str:
+        return f"{count} {word}{'' if count == 1 else 's'}"
+
     show_section(screen, "BLIND SPOTS")
-    screen.say(f"  {screen.amber('◌')} I couldn't check {not_checked} file{'' if not_checked == 1 else 's'}:")
+    if not_checked:
+        screen.say(f"  {screen.amber('◌')} I couldn't check {plural(not_checked, 'file')}:")
     for language, count in spots.unsupported.most_common():
-        screen.say(f"      {count} {language} file{'' if count == 1 else 's'} " + screen.dim("(I can't read this language yet)"))
+        screen.say(f"      {plural(count, language + ' file')} " + screen.dim("(I can't read this language yet)"))
     if spots.too_big:
-        screen.say(f"      {len(spots.too_big)} very large file{'' if len(spots.too_big) == 1 else 's'} " +
-                   screen.dim("(usually generated code)"))
+        screen.say(f"      {plural(len(spots.too_big), 'very large file')} " + screen.dim("(usually generated code)"))
+    if spots.generated:
+        screen.say(f"      {plural(len(spots.generated), 'minified or generated file')} " +
+                   screen.dim("(made by tools, not written by people)"))
     tripped_files = {t["path"] for t in spots.tripped}
     for path in sorted(tripped_files):
         screen.say(f"      {path} " + screen.dim("(something in it confused me)"))
+    if spots.test_files:
+        screen.say(f"  {screen.amber('◌')} {plural(spots.test_files, 'test or example file')} " +
+                   screen.dim("were only checked for real keys, and never changed."))
     screen.say(screen.dim("    The full list is saved in .decaloguex/blind-spots.json"))
 
 
@@ -711,15 +754,24 @@ def show_undo_done(screen: Screen, restored: list[str], when: str) -> None:
     screen.say()
 
 
-def show_telemetry_status(screen: Screen, enabled: bool, sending: bool) -> None:
+def show_telemetry_status(screen: Screen, enabled: bool, sending: bool, log: Path, in_ci: bool = False) -> None:
     screen.say()
     if not enabled:
-        screen.say(f"  Usage stats are {screen.coral('OFF', bold=True)}. Nothing is sent.")
-        screen.say(screen.dim("  Turn back on with: decaloguex telemetry on"))
+        why = " (this looks like an automated test server)" if in_ci else ""
+        screen.say(f"  Usage stats are {screen.coral('OFF', bold=True)}{why}. Nothing is sent.")
+        if not in_ci:
+            screen.say(screen.dim("  Turn back on with: decaloguex telemetry on"))
     else:
         screen.say(f"  Usage stats are {screen.mint('ON', bold=True)}.")
         if not sending:
             screen.say(screen.dim("  (No stats destination is set up in this copy, so nothing is actually sent.)"))
         screen.say(screen.dim("  Only anonymous counts are sent: never your code, file names or secrets."))
         screen.say(screen.dim("  Turn off with: decaloguex telemetry off"))
+    screen.say(screen.dim(f"  Everything ever sent is listed in: {log}"))
+    screen.say()
+
+
+def show_early_access(screen: Screen) -> None:
+    """One quiet line at the very end of every scan."""
+    screen.say(screen.dim(f"  ✦ {EARLY_ACCESS_NOTICE}"))
     screen.say()

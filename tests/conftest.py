@@ -22,6 +22,11 @@ def private_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("DECALOGUEX_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DECALOGUEX_TELEMETRY", "off")
     monkeypatch.delenv("DECALOGUEX_POSTHOG_KEY", raising=False)
+    # Automated test servers set settings like CI=true, which switch the
+    # stats off. Clear them, so tests behave the same on any computer.
+    from decaloguex.telemetry import CI_SETTINGS
+    for name in CI_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

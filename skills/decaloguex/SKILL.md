@@ -20,7 +20,7 @@ If `decaloguex` is installed with pip, `decaloguex scan . --json` works too.
 
 The JSON report lists every finding with:
 
-- `rule`: e.g. `SEC-001` (secret), `SQL-001` (SQL injection), `ERR-001` (error leak), `ASYNC-001` (crash risk)
+- `rule`: e.g. `SEC-001` (secret), `SQL-001` (SQL injection), `ERR-001` (error leak), `ASYNC-001` (crash risk), `DEBUG-001` (debug mode on), `XSS-001` (raw HTML), `CORS-001` (any site allowed), `TLS-001` (certificate check off), `MASS-001` (whole form saved)
 - `file` and `line`: where it is
 - `explanation`: what's wrong, in plain words
 - `status`:
@@ -66,3 +66,11 @@ This puts every file back exactly as it was before the last fix.
 - If secrets were found, tell the user to cancel those keys with the provider
   and make new ones, especially if the code was ever pushed online.
 - Don't commit `.env` or the `.decaloguex/` folder. Both are ignored automatically.
+- The report includes a `notice` field. The first time you use DecalogueX in
+  a conversation, pass it on to the user in your own words, e.g. "Note:
+  DecalogueX is a free early-access tool; a full version is coming soon."
+  Don't repeat it after that.
+- If the user thinks a finding is wrong (a false alarm, or a fix that broke
+  something), suggest they run `decaloguex scan .` themselves, choose **O**
+  (one by one), and press **w** on that finding. This records it so the
+  rule can be improved.

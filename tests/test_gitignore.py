@@ -74,3 +74,57 @@ def test_git_backed_check_sees_ignored_env(tmp_path):
     (tmp_path / ".env.local").write_text("B=2\n", encoding="utf-8")
 
     assert engine.scan(tmp_path).findings == []
+
+
+def test_env_already_in_git_with_example_values_gets_honest_advice(tmp_path):
+    """python-3-fastapi-template saves its .env in Git on purpose, full of
+    "changethis". Adding .env to .gitignore would do nothing (Git keeps
+    tracking a file it already has), so it gets a card saying what helps."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET_KEY=changethis\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".env", ".gitignore"], cwd=tmp_path, check=True)
+
+    found = [f for f in engine.scan(tmp_path).findings if f.rule_id.startswith("GIT")]
+    assert len(found) == 1 and found[0].fix is None
+    assert "git rm --cached .env" in found[0].note
+
+
+def test_shared_ci_settings_in_git_are_left_alone(tmp_path):
+    """php-1-laravel-realworld saves .env.travis in Git: made-up values for the
+    Travis test service, shared on purpose."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env.travis").write_text("APP_ENV=testing\nDB_CONNECTION=sqlite\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".env.travis", ".gitignore"], cwd=tmp_path, check=True)
+    assert [f for f in engine.scan(tmp_path).findings if f.rule_id.startswith("GIT")] == []
+
+
+def test_tracked_env_with_only_public_settings_is_left_alone(tmp_path):
+    """go-3-pocketbase saves ui/.env in Git with only a web address in it."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("PB_BACKEND_URL=http://127.0.0.1:8090\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".env", ".gitignore"], cwd=tmp_path, check=True)
+    assert [f for f in engine.scan(tmp_path).findings if f.rule_id.startswith("GIT")] == []

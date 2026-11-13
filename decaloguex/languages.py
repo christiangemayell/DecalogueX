@@ -81,6 +81,10 @@ SWIFT = LanguageInfo("swift", "swift", _grammar(tree_sitter_swift.language), "Sw
 HTML = LanguageInfo("html", "js", JAVASCRIPT.grammar, "HTML", embedded=True)
 VUE = LanguageInfo("vue", "js", JAVASCRIPT.grammar, "Vue", embedded=True)
 SVELTE = LanguageInfo("svelte", "js", JAVASCRIPT.grammar, "Svelte", embedded=True)
+# Server page templates: HTML with C# (Razor) or Ruby (ERB) mixed in. Their
+# <script> tags are checked like any web page's.
+RAZOR = LanguageInfo("razor", "js", JAVASCRIPT.grammar, "Razor", embedded=True)
+ERB = LanguageInfo("erb", "js", JAVASCRIPT.grammar, "ERB", embedded=True)
 
 # File extension -> language. A dict is Python's HashMap, written as {key: value}.
 EXTENSIONS: dict[str, LanguageInfo] = {
@@ -105,6 +109,9 @@ EXTENSIONS: dict[str, LanguageInfo] = {
     ".htm": HTML,
     ".vue": VUE,
     ".svelte": SVELTE,
+    ".cshtml": RAZOR,
+    ".razor": RAZOR,
+    ".erb": ERB,
 }
 
 

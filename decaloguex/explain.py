@@ -46,6 +46,25 @@ EXPLANATIONS = {
         "This is a private key, like a master password for your server, and it's sitting in plain sight.",
         "This one is too delicate for me to move, so I'll tell you how to do it.",
     ),
+    "AUTH-001": Explanation(
+        "🚧", "Logged-out visitors get past the owner check",
+        "This checks that the data belongs to the person asking, but when nobody is logged in the check "
+        "is quietly skipped, so anyone can reach everyone's data.",
+        "I'll show you the one line to add so logged-out visitors are turned away first.",
+    ),
+    "AUTH-002": Explanation(
+        "🚧", "Anyone logged in can change anyone's data",
+        "This changes or deletes something picked by an ID in the web address, but never checks it belongs "
+        "to the person asking, so anyone could change the number and edit someone else's.",
+        "I'll show you the check to add so people can only change their own things.",
+    ),
+    "SEC-004": Explanation(
+        "🔑", "Backup secret anyone can guess",
+        "If the real secret is ever missing, your app quietly uses a backup word that's written in your "
+        "code, like a lock that opens with a password printed in the public instructions.",
+        "I'll remove the backup, so the app stops instead of running unlocked, and put a fresh secret "
+        "in your private .env file so it still works on your computer.",
+    ),
 
     # --- .gitignore ------------------------------------------------------------
     "GIT-001": Explanation(
@@ -127,6 +146,37 @@ EXPLANATIONS = {
         "💥", "A background job could crash your app",
         "This starts a job that runs on its own with no safety net, so one error inside it can crash the app.",
         "I'll tell you how to give it a safety net.",
+    ),
+    # --- Web safety ---------------------------------------------------------
+    "DEBUG-001": Explanation(
+        "🐞", "Debug mode is left on",
+        "When something breaks, debug mode shows anyone a detailed page of your code and settings, "
+        "sometimes even passwords.",
+        "I'll make debug mode stay on for you on your computer, and switch off once the app is online.",
+    ),
+    "XSS-001": Explanation(
+        "🪤", "Visitors could sneak scripts into your pages",
+        "This puts raw HTML into a page, so if a visitor types code into it, that code can run in other "
+        "visitors' browsers and steal their logins.",
+        "I'll make sure what visitors type is shown as plain text, not run as code.",
+    ),
+    "CORS-001": Explanation(
+        "🚪", "Any website can use your server",
+        "Your server lets every website on the internet call it, so a bad site could use it on your "
+        "visitors' behalf.",
+        "I'll tell you how to allow only your own website.",
+    ),
+    "TLS-001": Explanation(
+        "🔓", "A security check is switched off",
+        "The check that proves you're talking to the real server is turned off, so someone on the same "
+        "Wi-Fi could pretend to be it and read everything.",
+        "I'll tell you how to switch the check back on safely.",
+    ),
+    "MASS-001": Explanation(
+        "📝", "Visitors could give themselves extra powers",
+        "Everything a visitor sends gets saved, so they could add a field like \"admin: yes\" that your "
+        "form never had.",
+        "I'll tell you how to save only the fields you choose.",
     ),
     "ASYNC-009": Explanation(
         "⏳", "Background errors disappear without a trace",

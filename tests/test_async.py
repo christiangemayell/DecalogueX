@@ -108,10 +108,18 @@ def test_guarded_route_and_non_express_file_are_left_alone(tmp_path):
 # --- ASYNC-002: .then() without .catch() --------------------------------------
 
 def test_then_chain_gets_a_catch(tmp_path):
-    app = write(tmp_path, "app.js", "fetch(url).then((r) => r.json()).then(show);\n")
+    # require(...) shows this runs on a server, where an unhandled error can crash it.
+    app = write(tmp_path, "app.js", 'const db = require("./db");\nfetch(url).then((r) => r.json()).then(show);\n')
     fix(tmp_path)
     assert app.read_text(encoding="utf-8") == \
-        "fetch(url).then((r) => r.json()).then(show).catch((err) => console.error(err));\n"
+        'const db = require("./db");\nfetch(url).then((r) => r.json()).then(show).catch((err) => console.error(err));\n'
+
+
+def test_then_chain_in_browser_code_is_left_alone(tmp_path):
+    # In a visitor's browser a missing .catch() only prints a console warning.
+    # Testing found 116 of these in one website's front end: just noise.
+    write(tmp_path, "page.js", 'import { ref } from "vue";\nfetch(url).then((r) => r.json()).then(show);\n')
+    assert async_ids(tmp_path) == []
 
 
 def test_handled_promises_are_left_alone(tmp_path):

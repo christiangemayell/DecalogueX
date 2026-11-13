@@ -92,7 +92,8 @@ def test_every_rule_has_a_plain_explanation():
     rules_folder = Path(__file__).parent.parent / "decaloguex" / "rules"
     used = set()
     for rule_file in rules_folder.glob("*.py"):
-        used |= set(re.findall(r'"((?:SEC|GIT|SQL|ERR|ASYNC)-\d{3})"', rule_file.read_text(encoding="utf-8")))
+        used |= set(re.findall(r'"((?:SEC|GIT|SQL|ERR|ASYNC|DEBUG|XSS|CORS|TLS|MASS)-\d{3})"',
+                               rule_file.read_text(encoding="utf-8")))
     missing = used - EXPLANATIONS.keys()
     assert not missing, f"Add these to explain.py: {sorted(missing)}"
 

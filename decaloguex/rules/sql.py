@@ -88,6 +88,8 @@ def check(file: SourceFile, info: ProjectInfo) -> list[Finding]:
         built = sql_string(node, file)          # steps 1 and 2a
         if built is None:
             continue
+        if only_names_inserted(built.parts, text):
+            continue  # "DELETE FROM " + tableName: a name from the app, not a visitor
         finding = query_finding(file, built, drivers)
         if finding is not None:
             findings.append(finding)
@@ -450,6 +452,55 @@ PY_QUERY_METHODS = {"execute", "executemany", "executescript", "raw", "fetch", "
                     "text", "read_sql", "read_sql_query", "exec_driver_sql"}
 
 
+# Variables that hold a table, column or index NAME, not a value:
+#   "DELETE FROM " + tableName     fmt.Sprintf("UPDATE %s SET ...", tableName)
+# Databases can't take names as ? placeholders, and these names come from the
+# app's own code, not from visitors. (order/sort are NOT included: "sort by"
+# often comes straight from the web address.)
+NAME_HOLDER = re.compile(
+    r"(?i)^[\w.$>-]*?(?:table|column|col|cols|sequence|seq|index|idx|schema|constraint)(?:_?name|s|name_?quoted|quoted)?(?:\(\))?$")
+
+
+def only_names_inserted(parts: list[Part], file_text) -> bool:
+    """Is every value put into this SQL a table/column/sequence name?
+
+    Either its variable is named like one (tableName), or it sits where SQL
+    expects a name, inside name quotes:
+        UPDATE {{%s}} SET [[%s]] = ...     (PocketBase / ozzo-dbx)
+        SELECT * FROM `%s`                 (MySQL)
+    """
+    values = []
+    for index, part in enumerate(parts):
+        if part.expr is None:
+            continue
+        # (Some languages store the value as plain text already, others as a tree node.)
+        value = (part.expr if isinstance(part.expr, str) else file_text(part.expr)).strip()
+        if FROM_REQUEST.search(value):
+            return False
+        before = parts[index - 1].text if index > 0 and parts[index - 1].text else ""
+        in_name_quotes = before.endswith(("{{", "[[", "`")) or bool(TABLE_IN_QUOTES.search(before))
+        values.append(in_name_quotes or bool(NAME_HOLDER.match(value)) or bool(ALREADY_ESCAPED.search(value)))
+    return bool(values) and all(values)
+
+
+# A table name in double quotes:  FROM "$name"   (double quotes hold a NAME in
+# standard SQL; only straight after a table keyword, to be safe)
+TABLE_IN_QUOTES = re.compile(r'(?i)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+\\?"$')
+
+# Values that can't carry visitor text, and say so:
+#   #{quoted_vector}   escaped with the database's quote() first
+#   #{DISTRIBUTION_GROUPS}   a CONSTANT written in the code
+#   #{limit.to_i}  int(x)  Number(x)   turned into a number
+#   #{ids.to_sql}   SQL built by the database library itself
+ALREADY_ESCAPED = re.compile(
+    r"(?i:(?:^|[._])(?:quoted|escaped|sanitized)_?\w*$|\.quote\(|connection\.quote)"
+    r"|^[A-Z][A-Z0-9_]*(?:\.[A-Z][A-Z0-9_]*)*$"
+    r"|\.to_[if]$|\.to_sql$|^(?:int|float|parseInt|parseFloat|Number|Math\.\w+)\(|\.(?:Atoi|Itoa)\(|strconv\.")
+
+# ...but a name taken from the request IS visitor input:  req.query.table
+FROM_REQUEST = re.compile(r"(?i)\b(?:req|request|params|query|body|form|args|input|ctx)\b|\$_(?:GET|POST|REQUEST)")
+
+
 def looks_like_sql(sql_text: str) -> bool:
     start = SQL_START.search(sql_text)
     if not start or not SQL_SHAPE.search(sql_text):
@@ -599,9 +650,11 @@ def parameterize(parts: list[Part], style: str) -> tuple[str, list[Node]]:
 
         values.append(part.expr)
         if style == "$n":
-            sql += f"${len(values)}"  # $1, $2, $3 ...
+            sql += f"${len(values)}"      # $1, $2, $3 ...
+        elif style == "@p":
+            sql += f"@p{len(values) - 1}"  # @p0, @p1 ... (C#'s Dapper)
         else:
-            sql += style              # ? or %s
+            sql += style                  # ? or %s
     return sql, values
 
 

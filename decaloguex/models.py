@@ -93,3 +93,7 @@ class Finding:
     severity: Severity = Severity.CRITICAL
     fix: Fix | None = None  # None = we can detect it but can't fix it safely
     note: str = ""          # advice shown when there is no automatic fix
+    # For secrets only: a scrambled fingerprint of the secret, so the SAME
+    # secret found in several files becomes one card. It can't be turned back
+    # into the secret, and it's never shown, saved or sent anywhere.
+    same_as: str = field(default="", repr=False, compare=False)
