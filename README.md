@@ -160,6 +160,7 @@ word for it.
 | `decaloguex scan .` | Scan the folder you're in, explain the problems, and ask what to fix |
 | `decaloguex scan . --dry-run` | Only show problems, never change anything |
 | `decaloguex scan . --yes` | Fix everything without asking |
+| `decaloguex scan . --all` | Also show places that are only *worth a look* (by default only sure problems are shown, with one line counting the rest) |
 | `decaloguex undo` | Put back everything the last fix changed |
 | `decaloguex scan . --json` | A report for AI tools (add `--yes` to also fix) |
 | `decaloguex scan . --no-animation` | Same screen, without the moving bars and scenes |
@@ -348,6 +349,16 @@ Each problem in the report has an ID, so you can look it up here.
 | SEC-004 | A backup secret anyone can guess, like `process.env.JWT_SECRET \|\| 'superSecret'` |
 | AUTH-001 | An owner check that lets logged-out visitors through (reported only) |
 | AUTH-002 | Anyone logged in can change or delete anyone's data (reported only) |
+| CMD-001 | Visitor text put into a computer command (reported only) |
+| EVAL-001 | Visitor text run as code (reported only) |
+| PATH-001 | Visitor picks which file is read (reported only) |
+| DESER-001 | Data loaded in a way that can run hidden code (fixed for Python's yaml.load) |
+| NOSQL-001 | MongoDB search built from visitor input (reported only) |
+| REDIRECT-001 | Visitor picks where the site sends people (reported only) |
+| SSRF-001 | Server fetches a web address the visitor chose (reported only) |
+| XXE-001 | XML reader can be tricked into reading your files (reported only) |
+| HASH-001 | Passwords scrambled with MD5 or SHA-1 (reported only) |
+| CSRF-001 | Protection against fake form submissions switched off (reported only) |
 
 </details>
 

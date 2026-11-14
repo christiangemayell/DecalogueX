@@ -32,7 +32,7 @@ from pathlib import Path
 from decaloguex import languages, project
 from decaloguex.blindspots import MAX_FILE_SIZE, BlindSpots, unsupported_language
 from decaloguex.models import AppendEdit, Finding, TextEdit
-from decaloguex.rules import async_, auth, config_files, errors, fallbacks, gitignore, other_languages, secrets, sql, web
+from decaloguex.rules import async_, auth, config_files, injection, errors, fallbacks, gitignore, other_languages, secrets, sql, web
 from decaloguex.undo import Backup, fingerprint
 
 
@@ -168,6 +168,10 @@ def check_code_file(result: ScanResult, root: Path, path: Path, planner, info) -
     rules["web"] = lambda: web.check(file, planner, info)
     # A backup secret anyone can guess:  process.env.JWT_SECRET || 'superSecret'
     rules["fallbacks"] = lambda: fallbacks.check(file, planner, web.comment_ranges(file))
+    # Command injection, eval, file paths, unsafe loading, NoSQL, redirects, SSRF,
+    # XML, weak password hashing and CSRF: every language (see rules/injection.py).
+    on_server = async_.runs_on_server(file) if file.lang.family == "js" else True
+    rules["injection"] = lambda: injection.check(file, web.comment_ranges(file), on_server)
 
     found = []
     for rule_name, run_rule in rules.items():
@@ -198,6 +202,37 @@ REVIEWED_FOR = {
     "SEC-002": re.compile(rb"#\s*nosec|noqa:\s*S105|gitleaks:allow|pragma:\s*allowlist secret"),
     "SEC-001": re.compile(rb"gitleaks:allow|pragma:\s*allowlist secret"),
 }
+
+
+# ===========================================================================
+# CONFIDENCE: "sure" problems, and places that are only "worth a look"
+# ===========================================================================
+#
+# Some cards can only be judged by a person: is this HTML from a visitor, or
+# from you? Is the owner check done in another file? Big projects can have
+# hundreds of these, and a wall of maybes makes a tool look noisy even when
+# every card is honest. So by default only SURE problems are shown, with one
+# line counting the rest; `decaloguex scan --all` shows everything.
+# (A finding with an automatic fix is always "sure": DecalogueX only fixes
+# what it's certain about.)
+
+WORTH_A_LOOK_RULES = {"XSS-001", "REDIRECT-001", "CSRF-001", "AUTH-002"}
+
+
+def is_worth_a_look(finding: Finding) -> bool:
+    if finding.fix is not None:
+        return False
+    if finding.rule_id in WORTH_A_LOOK_RULES:
+        return True
+    # An error sent with a status chosen while the app runs: maybe a deliberate 404.
+    return finding.rule_id == "ERR-001" and "chosen while the app runs" in finding.note
+
+
+def split_by_confidence(findings: list[Finding]) -> tuple[list[Finding], list[Finding]]:
+    """(sure, worth_a_look)"""
+    sure = [f for f in findings if not is_worth_a_look(f)]
+    maybe = [f for f in findings if is_worth_a_look(f)]
+    return sure, maybe
 
 
 MIGRATION_FOLDER = re.compile(r"(?:^|/)(?:migrations?|migrate|modelmigration|alembic)/")

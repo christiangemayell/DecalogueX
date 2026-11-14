@@ -224,3 +224,16 @@ def test_json_report_is_readable_when_saved_to_a_file(tmp_path):
                          capture_output=True)
     out.stdout.decode("ascii")  # fails if anything isn't plain ASCII
     assert json.loads(out.stdout)["findings"]
+
+
+def test_sql_query_wrapped_in_brackets_is_found(tmp_path):
+    # broken-6-pygoat: dockerized_labs/sql_injection_lab/app.py. Long queries are
+    # often wrapped in brackets over several lines; the stored-in-a-variable
+    # check didn't look through them.
+    write(tmp_path, "app.py", "import sqlite3\n\ndef lab(username, password):\n"
+                              "    sql_query = (\n"
+                              "        f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n"
+                              "    )\n"
+                              "    c = sqlite3.connect('db').cursor()\n"
+                              "    return c.execute(sql_query).fetchone()\n")
+    assert [f.rule_id for f in found(tmp_path, "SQL")] == ["SQL-002"]

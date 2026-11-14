@@ -617,6 +617,21 @@ def show_blind_spots(screen: Screen, spots) -> None:
     screen.say(screen.dim("    The full list is saved in .decaloguex/blind-spots.json"))
 
 
+def show_worth_a_look(screen: Screen, count: int) -> None:
+    """One line for the places only a person can judge (hidden unless --all).
+
+    Showing hundreds of "maybe" cards would bury the real problems, so they
+    get a single honest line instead of disappearing silently.
+    """
+    if not count:
+        return
+    places = "place" if count == 1 else "places"
+    screen.say()
+    screen.say(f"  {screen.amber('◌')} Plus {count} {places} worth a look, that only a person can judge "
+               + screen.dim("(for example, HTML that may or may not come from visitors)."))
+    screen.say(screen.dim("    See them with:  decaloguex scan --all"))
+
+
 # ===========================================================================
 # THE APPROVAL STAMP (the big finish)
 # ===========================================================================

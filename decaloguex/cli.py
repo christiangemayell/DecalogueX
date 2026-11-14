@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     scan_cmd.add_argument("-y", "--yes", action="store_true", help="fix everything without asking")
     scan_cmd.add_argument("--dry-run", action="store_true", help="only show problems; change nothing")
     scan_cmd.add_argument("--json", action="store_true", help="print a JSON report for AI tools")
+    scan_cmd.add_argument("--all", action="store_true", dest="show_all",
+                          help="also show places that are only worth a look, not just sure problems")
     scan_cmd.add_argument("--no-animation", action="store_true", help="no moving bars or spinners")
     scan_cmd.add_argument("--no-color", action="store_true", help="plain text, no colours")
 
@@ -65,10 +67,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "telemetry":
             return run_telemetry(args.setting)
         if args.json:
-            return run_json(Path(args.path), assume_yes=args.yes)
+            return run_json(Path(args.path), assume_yes=args.yes, show_all=args.show_all)
         # argparse turns "--dry-run" into the attribute name dry_run.
         return run_scan(Path(args.path), assume_yes=args.yes, dry_run=args.dry_run,
-                        no_color=args.no_color, no_animation=args.no_animation)
+                        no_color=args.no_color, no_animation=args.no_animation, show_all=args.show_all)
     finally:
         telemetry.finish()  # let any usage stats finish sending (at most 1.5 seconds)
 
@@ -84,6 +86,7 @@ def run_scan(
     no_color: bool = False,
     no_animation: bool = False,
     ask: ui.Ask = input,
+    show_all: bool = False,
 ) -> int:
     """Scan, explain, ask, fix. Returns the exit code.
 
@@ -93,7 +96,7 @@ def run_scan(
     """
     screen = ui.setup_screen(no_color, no_animation)
     try:
-        return _run(screen, target, assume_yes, dry_run, ask)
+        return _run(screen, target, assume_yes, dry_run, ask, show_all)
     except KeyboardInterrupt:
         # Ctrl+C. Fixes are only written at the very end, so stopping
         # before that leaves every file exactly as it was.
@@ -104,7 +107,8 @@ def run_scan(
         screen.cursor(True)  # never leave the cursor hidden
 
 
-def _run(screen: ui.Screen, target: Path, assume_yes: bool, dry_run: bool, ask: ui.Ask) -> int:
+def _run(screen: ui.Screen, target: Path, assume_yes: bool, dry_run: bool, ask: ui.Ask,
+         show_all: bool = False) -> int:
     if not target.exists():
         screen.say(screen.coral(f"  I can't find {target}. Check the spelling and try again."))
         return 2
@@ -116,10 +120,15 @@ def _run(screen: ui.Screen, target: Path, assume_yes: bool, dry_run: bool, ask: 
     progress.finish(result.files_checked, result.seconds)
     if not dry_run:
         blindspots.save(result.root, result.blind_spots)
+    # Only SURE problems, unless --all (see "CONFIDENCE" in engine.py).
+    worth_a_look = []
+    if not show_all:
+        result.findings, worth_a_look = engine.split_by_confidence(result.findings)
 
     # 3: the report, one card per problem, then the blind spots.
     ui.show_report(screen, result.findings, result.root)
     ui.show_blind_spots(screen, result.blind_spots)
+    ui.show_worth_a_look(screen, len(worth_a_look))
     fixable, manual = ui.sort_findings(result.findings)
 
     if not result.findings or dry_run or not fixable:
@@ -212,7 +221,7 @@ def finish_scan(screen: ui.Screen, result, choice: str, chosen=(), applied=(), r
 # SCAN --json (for AI tools)
 # ===========================================================================
 
-def run_json(target: Path, assume_yes: bool = False) -> int:
+def run_json(target: Path, assume_yes: bool = False, show_all: bool = False) -> int:
     """Print one JSON report. No animations and no questions.
 
     Without --yes nothing is changed. With --yes every fix is applied, and
@@ -223,6 +232,9 @@ def run_json(target: Path, assume_yes: bool = False) -> int:
         return 2
     result = engine.scan(target)
     blindspots.save(result.root, result.blind_spots)
+    worth_a_look = []
+    if not show_all:
+        result.findings, worth_a_look = engine.split_by_confidence(result.findings)
 
     fixable = [f for f in result.findings if f.fix]
     applied, rejected = [], []
@@ -239,6 +251,8 @@ def run_json(target: Path, assume_yes: bool = False) -> int:
         "seconds": round(result.seconds, 3),
         "findings": [finding_json(f, result.root, applied, rejected) for f in result.findings],
         "blind_spots": result.blind_spots.to_dict(),
+        # Places only a person can judge, hidden unless --all (see engine.py, CONFIDENCE).
+        "worth_a_look": len(worth_a_look),
         "fixes_applied": len(applied),
         "undo": "decaloguex undo" if applied else None,
         # AI tools are asked (in SKILL.md) to pass this on to the user once.
@@ -281,6 +295,7 @@ def finding_json(finding, root: Path, applied: list, rejected: list) -> dict:
         "status": status,
         "fix": {"before": finding.fix.preview_before, "after": finding.fix.preview_after} if finding.fix else None,
         "manual_step": finding.note or None,
+        "confidence": "worth_a_look" if engine.is_worth_a_look(finding) else "sure",
     }
 
 

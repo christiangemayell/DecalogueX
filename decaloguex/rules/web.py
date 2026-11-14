@@ -120,6 +120,18 @@ PATTERNS = [
             unless=SANITIZED),
     pattern("XSS-001", rb"<%-|\{\{\{|\|\s*raw\b", "template", unless=SANITIZED),
     pattern("XSS-001", rb"\btemplate\.HTML\(", "go", unless=SANITIZED),
+    # Gaps found with the broken-on-purpose apps (DVWA, Juice Shop, NodeGoat):
+    #   PHP building HTML out of visitor input:  $html .= '<pre>Hello ' . $_GET['name'] . '</pre>';
+    pattern("XSS-001", rb"""(?:\.=|=|\becho\b|\bprint\b)\s*[^;\n]*<[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE)\s*\["""
+                       rb"""|(?:\.=|\becho\b|\bprint\b)\s*[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE)\s*\[[^;\n]*<""",
+            "php", unless=SANITIZED),
+    #   Angular: switching its built-in cleaning off
+    #   (Its object is usually called "sanitizer", so only a real cleaning library counts as cleaned.)
+    pattern("XSS-001", rb"\bbypassSecurityTrust(?:Html|Script|Url|ResourceUrl|Style)\s*\(", "js",
+            unless=rb"DOMPurify|purify\.sanitize|sanitizeHtml\("),
+    #   Template engines with automatic escaping switched off for the WHOLE app
+    pattern("XSS-001", rb"\bautoescape\s*:\s*false\b|\bnoEscape\s*:\s*true\b", "js"),
+    pattern("XSS-001", rb"\bautoescape\s*=\s*False\b", "python"),
 
     # --- CORS-001 -------------------------------------------------------------
     pattern("CORS-001", rb"""\bcors\(\s*\)|\borigin\s*:\s*(?:['"]\*['"]|true\b)|Access-Control-Allow-Origin['"]\s*,\s*['"]\*""",

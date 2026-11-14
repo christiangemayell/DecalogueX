@@ -8,6 +8,8 @@ hands back the next answer from a list, like someone pressing keys.
 import re
 from pathlib import Path
 
+import json
+
 from decaloguex.cli import run_scan
 from decaloguex.explain import EXPLANATIONS
 
@@ -121,3 +123,37 @@ def test_no_stamp_while_problems_are_left(tmp_path, capsys):
     shown = capsys.readouterr().out
     assert "VERIFICATION COMPLETE" not in shown
     assert "Not approved yet" in shown
+
+
+# --- Confidence levels: "sure" problems vs places "worth a look" --------------------------
+
+def _maybe_project(tmp_path):
+    (tmp_path / "page.js").write_text("el.innerHTML = userBio;\n", encoding="utf-8")       # worth a look
+    (tmp_path / "app.py").write_text("DEBUG = True\n", encoding="utf-8")                    # sure
+
+
+def test_worth_a_look_cards_are_hidden_by_default(tmp_path, capsys):
+    _maybe_project(tmp_path)
+    run_scan(tmp_path, dry_run=True, no_color=True, no_animation=True)
+    shown = capsys.readouterr().out
+    assert "Plus 1 place worth a look" in shown and "decaloguex scan --all" in shown
+    assert "XSS-001" not in shown and "DEBUG-001" in shown
+
+
+def test_all_shows_worth_a_look_cards(tmp_path, capsys):
+    _maybe_project(tmp_path)
+    run_scan(tmp_path, dry_run=True, no_color=True, no_animation=True, show_all=True)
+    shown = capsys.readouterr().out
+    assert "XSS-001" in shown and "worth a look" not in shown
+
+
+def test_json_counts_worth_a_look_and_marks_confidence(tmp_path, capsys):
+    from decaloguex.cli import run_json
+    _maybe_project(tmp_path)
+    run_json(tmp_path)
+    report = json.loads(capsys.readouterr().out)
+    rules = [f["rule"] for f in report["findings"]]
+    assert report["worth_a_look"] == 1 and "DEBUG-001" in rules and "XSS-001" not in rules
+    run_json(tmp_path, show_all=True)
+    report = json.loads(capsys.readouterr().out)
+    assert {f["confidence"] for f in report["findings"]} == {"sure", "worth_a_look"}

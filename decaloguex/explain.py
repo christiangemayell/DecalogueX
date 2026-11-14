@@ -58,6 +58,57 @@ EXPLANATIONS = {
         "to the person asking, so anyone could change the number and edit someone else's.",
         "I'll show you the check to add so people can only change their own things.",
     ),
+    "CMD-001": Explanation(
+        "💣", "Visitors could run commands on your server",
+        "Text a visitor typed is glued into a computer command, so they can add their own command, "
+        "like one that deletes everything.",
+        "I'll show you how to pass the value safely, without a command line in between.",
+    ),
+    "EVAL-001": Explanation(
+        "💣", "Visitors could run their own code",
+        "Text a visitor typed is run as code, so they can type code that does anything your app can do.",
+        "I'll show you how to read the value as plain data instead.",
+    ),
+    "PATH-001": Explanation(
+        "📂", "Visitors pick which file is opened",
+        "A visitor can ask for any file, like ../../.env, and download your secrets or delete files.",
+        "I'll show you how to only allow the files you mean to share.",
+    ),
+    "DESER-001": Explanation(
+        "📦", "Loaded data could run hidden code",
+        "This way of loading data can create objects and run code hidden inside it.",
+        "I'll switch to the safe loader where I can, and tell you how otherwise.",
+    ),
+    "NOSQL-001": Explanation(
+        "🗃️", "Database search can be twisted",
+        "A visitor can change what this MongoDB search looks for, and see or change everyone's data.",
+        "I'll show you how to turn the input into plain text first.",
+    ),
+    "REDIRECT-001": Explanation(
+        "↪️", "Your site can be used to send people to scam sites",
+        "A visitor picks where your site sends people, so scammers can share links that look like yours.",
+        "I'll show you how to only allow your own pages.",
+    ),
+    "SSRF-001": Explanation(
+        "🛰️", "Your server fetches any address a visitor gives",
+        "A visitor can make your server open private addresses, like internal systems or cloud passwords.",
+        "I'll show you how to only allow addresses you trust.",
+    ),
+    "XXE-001": Explanation(
+        "📄", "XML files could read your server's files",
+        "This XML reader follows links inside the file, so an uploaded XML file can read files on your server.",
+        "I'll show you the one setting that switches that off.",
+    ),
+    "HASH-001": Explanation(
+        "🔓", "Passwords are scrambled the weak way",
+        "MD5 and SHA-1 can be reversed in seconds, so stolen passwords would be readable.",
+        "I'll show you the password scrambler made for the job.",
+    ),
+    "CSRF-001": Explanation(
+        "🎭", "Fake form protection is switched off",
+        "Other websites can submit forms on your site as your logged-in visitors.",
+        "I'll show you when it's safe to switch off, and how to turn it back on.",
+    ),
     "SEC-004": Explanation(
         "🔑", "Backup secret anyone can guess",
         "If the real secret is ever missing, your app quietly uses a backup word that's written in your "

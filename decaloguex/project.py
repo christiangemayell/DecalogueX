@@ -61,7 +61,7 @@ SKIP_DIRS = {
 
 # A folder with one of these names holds tests, test data or examples.
 TEST_FOLDERS = {
-    "test", "tests", "__tests__", "spec", "specs", "testdata", "test-data", "test_data",
+    "test", "tests", "__tests__", "spec", "specs", "testdata", "test-data", "test_data", "unittest", "testutil",
     "fixtures", "__fixtures__", "__mocks__", "mocks", "stubs", "factories", "seeders", "seeds",
     "examples", "example", "samples", "sample", "e2e", "cypress", "playwright", "integration-tests",
     # Settings for automatic testing services: their passwords are for throwaway test databases.

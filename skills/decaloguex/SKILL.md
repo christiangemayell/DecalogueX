@@ -27,6 +27,8 @@ The JSON report lists every finding with:
   - `fixable`: DecalogueX can fix it automatically
   - `manual`: it can't be fixed safely by a tool; `manual_step` says what to do
 - `blind_spots`: files it could not check (unsupported languages, very large files)
+- `worth_a_look`: how many places only a person can judge were left out (say so in one line; run again with `--all` only if the user asks to see them). With `--all`, each finding has `"confidence": "sure"` or `"worth_a_look"`.
+- If the user says a finding is fine after checking, they can add a `decaloguex-ignore` comment on that line.
 
 Exit code 0 means nothing was found. Exit code 1 means there are findings.
 

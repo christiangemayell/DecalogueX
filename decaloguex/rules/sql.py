@@ -879,7 +879,16 @@ BUILD_IT_YOURSELF = "Build '{name}' with placeholders and pass the values to the
 
 
 def assigned_variable(node: Node, file: SourceFile) -> str | None:
-    """The variable a built query is stored in:  const sql = `...`  ->  "sql"."""
+    """The variable a built query is stored in:  const sql = `...`  ->  "sql".
+
+    Brackets around the query are looked through, a common style for long
+    strings (found in pygoat's SQL injection lab):
+        sql_query = (
+            f"SELECT * FROM users WHERE username='{username}'"
+        )
+    """
+    while node.parent is not None and node.parent.type in ("parenthesized_expression", "parenthesized_list_splat"):
+        node = node.parent
     parent = node.parent
     if parent is None:
         return None
