@@ -18,14 +18,60 @@ a full version is coming soon.
 
 ---
 
-## Install
+## Install (2 minutes)
 
-Pick whichever you already have:
+**1. Get Python** (skip this if you already have it)
 
-| You have | Type this |
-|---|---|
-| **Node.js** (most JavaScript developers) | `npx decaloguex scan .` |
-| **Python 3.10 or newer** | `pip install decaloguex` then `decaloguex scan .` |
+Download it from [python.org/downloads](https://www.python.org/downloads/)
+and run the installer. **On Windows, tick "Add python.exe to PATH"** on the
+first screen. That one tick saves most install problems.
+
+**2. Install DecalogueX**
+
+Open a terminal (on Windows: press the Start key, type **Terminal**, press
+Enter) and type:
+
+```
+pip install decaloguex
+```
+
+That's it. Check it worked:
+
+```
+decaloguex --version
+```
+
+> **"decaloguex is not recognized"?** Use `python -m decaloguex` instead of
+> `decaloguex` in every command below. It does exactly the same thing.
+>
+> **Trying an early version before it's released?** Install it from GitHub instead:
+> `pip install git+https://github.com/christiangemayell/decaloguex`
+
+---
+
+## Check your project (3 steps)
+
+**1. Open a terminal in your project's folder.** In VS Code or Cursor: menu
+**Terminal → New Terminal**. It opens in your project's folder.
+
+**2. Scan it:**
+```
+decaloguex scan .
+```
+(The `.` means "this folder".)
+
+**3. Choose what to do.** DecalogueX explains every problem in plain words,
+then asks:
+
+- **A**: fix everything
+- **O**: go through them one by one, answering yes or no for each
+- **N**: change nothing
+
+Changed your mind? `decaloguex undo` puts everything back.
+
+When nothing is left to fix, you get the **DecalogueX approval stamp**.
+
+---
 
 ### Use it inside your AI coding tool
 
@@ -42,44 +88,28 @@ after it writes code.
   (or `.cursor/skills/` or `.claude/skills/`).
 - **Any other AI tool:** add this line to your project's `AGENTS.md` file:
   ```
-  After changing code, run `npx decaloguex scan . --json` and fix what it reports.
+  After changing code, run `decaloguex scan . --json` and fix what it reports.
   ```
+
+> **Use Node.js?** `npx decaloguex scan .` also works, but it still needs
+> Python installed (step 1 above), because DecalogueX is written in Python.
 
 ---
 
-## Try it in 3 steps
+## Try it on a practice app
 
-In this project's folder, open the terminal in VS Code (menu: **Terminal →
-New Terminal**) and type these one at a time, pressing Enter after each:
+Want to see it in action first? Download this project, open a terminal in
+its folder, and run:
 
-**1. Build a practice app full of mistakes**
 ```
 python scripts/make_demo.py
-```
-
-**2. Scan it**
-```
 decaloguex scan demo
 ```
-It explains every problem in plain words, then asks what you want to do:
 
-- **A**: fix everything
-- **O**: go through them one by one, answering yes or no for each
-- **N**: change nothing
-
-Type `A` and press Enter.
-
-**3. Scan it again**
-```
-decaloguex scan demo
-```
-It finds nothing left, and ends with the **DecalogueX approval stamp**.
-
-Run step 1 again any time to get a fresh broken app to practise on. To also
-see a problem that only a human can fix (shown as a **"What to do"** card),
-use `python scripts/make_demo.py --manual` instead.
-
-> **Windows tip:** if `decaloguex` isn't recognised, type `.venv\Scripts\decaloguex` instead.
+`make_demo.py` builds a small app full of mistakes. Type `A` to fix them all,
+then run `decaloguex scan demo` again to see the approval stamp. Run
+`make_demo.py` again any time for a fresh broken app. Add `--manual` to also
+see a problem only a person can fix (a **"What to do"** card).
 
 ---
 

@@ -480,8 +480,12 @@ def only_names_inserted(parts: list[Part], file_text, source: str = "") -> bool:
         SELECT * FROM `%s`                 (MySQL)
     """
     values = []
+    sql_text = "".join(part.text for part in parts if part.text)
+    uses_placeholders = bool(PLACEHOLDER_IN_SQL.search(sql_text))
+    sql_so_far = ""
     for index, part in enumerate(parts):
         if part.expr is None:
+            sql_so_far += part.text or ""
             continue
         # (Some languages store the value as plain text already, others as a tree node.)
         value = (part.expr if isinstance(part.expr, str) else file_text(part.expr)).strip()
@@ -489,9 +493,26 @@ def only_names_inserted(parts: list[Part], file_text, source: str = "") -> bool:
             return False
         before = parts[index - 1].text if index > 0 and parts[index - 1].text else ""
         in_name_quotes = before.endswith(("{{", "[[", "`")) or bool(TABLE_IN_QUOTES.search(before))
-        values.append(in_name_quotes or bool(NAME_HOLDER.match(value)) or bool(ALREADY_ESCAPED.search(value))
-                      or (bool(source) and fixed_text_variable(value, source)))
+        # Already passing its VALUES as placeholders (?, $1), and this piece sits
+        # where SQL structure goes (column lists, "IN (?,?,?)" clauses), not
+        # where a value goes: it's query-building, not injection. (idlerthing)
+        structural_spot = not is_value_position(sql_so_far)
+        structure = structural_spot and (bool(SQL_PIECE.search(value))
+                                         or (uses_placeholders and bool(TABLE_WORD.search(sql_so_far))))
+        values.append(in_name_quotes or structure or bool(NAME_HOLDER.match(value))
+                      or bool(ALREADY_ESCAPED.search(value)) or (bool(source) and fixed_text_variable(value, source)))
+        sql_so_far += "?"
     return bool(values) and all(values)
+
+
+# Right after a table keyword: a table name goes here, not a value.
+TABLE_WORD = re.compile(r"(?i)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s*$")
+
+# Placeholders for values:  ?   $1   :name   @p0   %s
+PLACEHOLDER_IN_SQL = re.compile(r"\?|\$\d+\b|(?<![:\w]):[a-z_]\w*\b|@p\d+\b|%s")
+# Pieces of SQL built by the code: column lists, clauses, fragments.
+#   prefixedColumns("a", ipColumns)   TargetNameSQL   clause   hostingColumns(st.typeCol)   whereSQL
+SQL_PIECE = re.compile(r"(?:[Cc]olumns?|[Cc]ols|SQL|Sql|[Cc]lause|[Ff]ragment|[Ff]ilter[Ss]ql)\b")
 
 
 # A table name in double quotes:  FROM "$name"   (double quotes hold a NAME in

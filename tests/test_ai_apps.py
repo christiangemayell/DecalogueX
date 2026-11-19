@@ -170,3 +170,38 @@ def test_own_site_redirects_are_fine(tmp_path):
                                   "  const q = searchParams.get('q')\n"
                                   "  router.push(`/products/search?q=${encodeURIComponent(q)}`)\n}\n")
     assert found(tmp_path, "REDIRECT") == []
+
+
+# --- Fresh AI apps round (ai-11 .. ai-20) ------------------------------------------------
+
+def test_sql_pieces_built_by_the_code_are_not_injection(tmp_path):
+    # idlerthing internal/model/ip.go and internal/web/export.go (Go, built with column lists and IN-clauses)
+    write(tmp_path, "ip.go", "package model\n\nfunc (s *IPStore) ListAll(ctx context.Context) {\n"
+                             "\trows, err := s.DB.QueryContext(ctx, `SELECT `+prefixedColumns(\"a\", ipColumns)+`, `+TargetNameSQL+` FROM ips a`)\n"
+                             "\t_ = rows\n\t_ = err\n}\n\n"
+                             "func disks(q Querier, clause string, args []any) {\n"
+                             "\tq.QueryContext(ctx, \"SELECT id FROM server_disks WHERE server_id \"+clause+\" ORDER BY id\", args...)\n}\n")
+    assert found(tmp_path, "SQL") == []
+
+
+def test_values_glued_into_sql_are_still_injection(tmp_path):
+    write(tmp_path, "search.go", "package web\n\nfunc search(q Querier, name string) {\n"
+                                 "\tq.QueryContext(ctx, \"SELECT id FROM users WHERE name = '\"+name+\"'\")\n}\n")
+    assert len(found(tmp_path, "SQL")) == 1
+
+
+def test_generic_api_key_with_a_public_name(tmp_path):
+    # what-to-eat src/stores/settings.js: an AI key built into every visitor's page
+    write(tmp_path, "settings.js", "const apiKey = import.meta.env.VITE_TEXT_GENERATION_API_KEY;\n"
+                                   "const maps = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;\n")
+    assert [f.title for f in found(tmp_path, "SEC-005")] == ["Secret with a public name: VITE_TEXT_GENERATION_API_KEY"]
+
+
+def test_express_5_in_a_monorepo_package(tmp_path):
+    # Bolform / Architects-Eye: the server's own package.json says Express 5
+    write(tmp_path, "package.json", '{ "name": "root" }\n')
+    write(tmp_path, "artifacts/api-server/package.json", '{ "dependencies": { "express": "^5.2.1" } }\n')
+    write(tmp_path, "artifacts/api-server/src/routes.ts",
+          "import { Router } from 'express';\nconst router = Router();\n"
+          "router.get('/x', async (req, res) => {\n  res.json(await load());\n});\n")
+    assert found(tmp_path, "ASYNC") == []

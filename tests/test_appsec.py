@@ -206,3 +206,9 @@ def test_an_express_server_that_sends_html_is_still_server_code(tmp_path):
                                  "const recoveryCode = Math.random().toString(36).substring(2, 15);\n"
                                  "app.listen(3000);\n")
     assert rules(tmp_path, "RAND") == ["server.js:4"]
+
+
+def test_analytics_and_chat_widget_tokens_are_public(tmp_path):
+    # paynless .env.example
+    write(tmp_path, ".env.example", "VITE_CHATWOOT_WEBSITE_TOKEN=\nVITE_MIXPANEL_PROJECT_TOKEN=\nVITE_SUPABASE_SERVICE_ROLE_KEY=\n")
+    assert rules(tmp_path, "SEC-005") == [".env.example:3"]

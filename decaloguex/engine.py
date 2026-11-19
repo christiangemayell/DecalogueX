@@ -259,7 +259,7 @@ def split_by_confidence(findings: list[Finding]) -> tuple[list[Finding], list[Fi
     return sure, maybe
 
 
-MIGRATION_FOLDER = re.compile(r"(?:^|/)(?:migrations?|migrate|modelmigration|alembic)/")
+MIGRATION_FOLDER = re.compile(r"(?:^|/)(?:migrations?|migrate|modelmigration|alembic)/|(?:^|/)migrat\w*\.\w+$")
 
 
 def without_reviewed_lines(findings: list[Finding], source: bytes) -> list[Finding]:

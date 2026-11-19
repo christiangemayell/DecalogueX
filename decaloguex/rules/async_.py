@@ -112,13 +112,31 @@ def check_express_routes(file: SourceFile, info: ProjectInfo) -> list[Finding]:
     return findings
 
 
+def nearest_package_dependencies(path) -> dict:
+    """The dependencies in the package.json closest to this file (walking up the folders)."""
+    import json
+    for folder in path.parents:
+        package = folder / "package.json"
+        if package.is_file():
+            try:
+                data = json.loads(package.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {}
+            return {**data.get("devDependencies", {}), **data.get("dependencies", {})}
+        if (folder / ".git").exists():
+            break  # don't wander outside the project
+    return {}
+
+
 def express_catches_async_errors(file: SourceFile, info: ProjectInfo) -> bool:
     """True if this project's Express already handles async errors itself.
 
     * Express 5 catches errors from async routes on its own.
     * The express-async-errors package teaches Express 4 to do the same.
     """
-    version = info.js_dependencies.get("express", "")
+    # In a monorepo the server has its OWN package.json (artifacts/api-server/package.json),
+    # so the one nearest the file wins. (Found in two Replit-built apps on Express 5.)
+    version = nearest_package_dependencies(file.path).get("express") or info.js_dependencies.get("express", "")
     # "^5.0.1", "~5.1", ">=5": the first number in the range is the major version.
     major = re.search(r"\d+", version)
     if major and int(major.group(0)) >= 5:
