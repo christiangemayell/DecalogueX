@@ -359,6 +359,14 @@ Each problem in the report has an ID, so you can look it up here.
 | XXE-001 | XML reader can be tricked into reading your files (reported only) |
 | HASH-001 | Passwords scrambled with MD5 or SHA-1 (reported only) |
 | CSRF-001 | Protection against fake form submissions switched off (reported only) |
+| SEC-005 | A secret with a public name (`NEXT_PUBLIC_`, `VITE_`...), so it's built into the page (reported only) |
+| JWT-001 | Login tokens accepted without checking their signature (reported only) |
+| UPLOAD-001 | Uploaded files saved without checking them (reported only, worth a look) |
+| RAND-001 | Guessable random numbers used for codes or tokens (reported only) |
+| AI-001 | An AI service's key exposed in the browser (reported only) |
+| AI-002 | What the AI wrote put into a page, a query or eval() (reported only) |
+| AI-003 | AI features with no rate limit anywhere in the project (reported only, worth a look) |
+| RLS-001 | A Supabase table with no access rules, or a rule letting anyone change rows (reported only) |
 
 </details>
 

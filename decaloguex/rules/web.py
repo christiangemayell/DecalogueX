@@ -162,6 +162,8 @@ PATTERNS = [
     pattern("TLS-001", rb"""NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*['"]?0""", "settings"),
 
     # --- MASS-001 -------------------------------------------------------------
+    pattern("MASS-001", rb"""\.(?:create|update|upsert|createMany)\(\s*\{[^}]*\bdata\s*:\s*(?:req\.body|body|await\s+req(?:uest)?\.json\(\))\s*[,}]""",
+            "js"),
     pattern("MASS-001", rb"""\.(?:create|insert|insertOne|insertMany|update|updateOne|build|upsert)\(\s*(?:\{\s*\.\.\.)?req\.body\s*[,)}]|\b(?:findByIdAndUpdate|findOneAndUpdate)\([^,()]+,\s*req\.body\s*[,)]|\bnew\s+[A-Z]\w*\(\s*req\.body\s*\)|Object\.assign\(\s*\w+\s*,\s*req\.body\s*\)""",
             "js"),
     pattern("MASS-001", rb"""::(?:create|forceCreate|firstOrCreate|updateOrCreate)\(\s*\$request->all\(\)\s*\)|->(?:update|fill|forceFill)\(\s*\$request->all\(\)\s*\)|::create\(\s*\$_POST\s*\)|\$guarded\s*=\s*\[\s*\]""",
@@ -219,6 +221,8 @@ def check(file: SourceFile, planner: secrets.EnvPlanner, info: ProjectInfo) -> l
     skip = {(f.rule_id, f.line) for f in fixed}  # already reported, with a fix
     comments = comment_ranges(file)
     found = [f for f in search(file.path, file.source, kinds_of(file), comments) if (f.rule_id, f.line) not in skip]
+    if file.path.as_posix().endswith("components/ui/chart.tsx"):
+        found = [f for f in found if f.rule_id != "XSS-001"]  # shadcn/ui: CSS from the app's own theme
     return fixed + [f for f in found if not (f.rule_id == "XSS-001" and (
         cleaned_elsewhere_in_file(file, f.line) or cleaned_in_page_loader(file, f.line)))]
 
@@ -352,6 +356,8 @@ def search(path: Path, source: bytes, kinds: set[str], comments: list[tuple[int,
                 note = CREDENTIALS_NOTE
             if item.rule == "XSS-001" and re.search(RAILS_JSON, line_text):
                 note = RAILS_JSON_NOTE
+            elif item.rule == "XSS-001" and USER_CONTENT.search(line_text):
+                note = USER_CONTENT_NOTE
             findings.append(Finding(item.rule, TITLES[item.rule], path, line, IMPACT[item.rule],
                                     SEVERITY.get(item.rule, Severity.WARNING), note=note))
     return findings
@@ -389,6 +395,13 @@ def uses_cookie_logins(source: bytes) -> bool:
     return COOKIE_LOGINS.search(source) is not None
 
 
+# HTML that comes from what USERS write: questions, answers, comments, messages, reviews, bios.
+# Shown as raw HTML, any user can post a script that runs for everyone else, so it's "sure".
+USER_CONTENT = re.compile(
+    rb"\b(?:question|answer|comment|post|message|review|reply|profile|chat|note|bio)s?\w*(?:\[\w+\])?\."
+    rb"(?:content|body|text|html|bio|message|description|comment)\b|\bprofile\.bio\b")
+USER_CONTENT_NOTE = ("This shows what a user wrote as raw HTML, so any user can post a script that runs in "
+                     "everyone else's browser. Show it as plain text, or clean it first with DOMPurify.")
 RAILS_JSON_NOTE = ("Rails' to_json normally makes this safe, but this app has switched that off "
                    "(escape_html_entities_in_json = false). Switch it back on, or use json_escape(...).")
 # An app that switches Rails' JSON safety off.

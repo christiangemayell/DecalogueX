@@ -237,3 +237,35 @@ def test_sql_query_wrapped_in_brackets_is_found(tmp_path):
                               "    c = sqlite3.connect('db').cursor()\n"
                               "    return c.execute(sql_query).fetchone()\n")
     assert [f.rule_id for f in found(tmp_path, "SQL")] == ["SQL-002"]
+
+
+# --- Found by the fix-mode test (every fix applied to real projects, then reviewed) --------
+
+def test_django_tests_py_is_never_changed(tmp_path):
+    # broken-6-pygoat introduction/tests.py: a made-up password a test types in.
+    original = 'def test_register(self):\n    data = {"password1": "Sup3r-Secret-pw!"}\n'
+    test = write(tmp_path, "introduction/tests.py", original)
+    fix(tmp_path)
+    assert test.read_text(encoding="utf-8") == original
+
+
+def test_rails_routes_are_not_secrets(tmp_path):
+    # broken-5-railsgoat config/routes.rb: fixing this would have broken password resets.
+    original = 'Rails.application.routes.draw do\n  get "forgot_password" => "password_resets#forgot_password"\nend\n'
+    routes = write(tmp_path, "config/routes.rb", original)
+    write(tmp_path, "app/x.rb", 'h = { "reset_password" => "password_resets#reset_password" }\n')
+    fix(tmp_path)
+    assert routes.read_text(encoding="utf-8") == original
+    assert found(tmp_path, "SEC") == []
+
+
+def test_database_reset_scripts_are_like_seed_files(tmp_path):
+    # broken-2-nodegoat artifacts/db-reset.js fills a test database with demo users.
+    write(tmp_path, "artifacts/db-reset.js", 'const users = [{ "password": "Admin_123" }];\n')
+    assert found(tmp_path, "SEC") == []
+
+
+def test_stored_password_hashes_are_not_passwords(tmp_path):
+    # broken-6-pygoat dockerized_labs/auth_failure_lab/app.py: SHA-256 hashes.
+    write(tmp_path, "app.py", 'users = {"a": {"password": "0b14d501a594442a01c6859541bcb3e8164d183d32937b851835442f69d5c94e"}}\n')
+    assert found(tmp_path, "SEC") == []

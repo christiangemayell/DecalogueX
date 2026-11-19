@@ -79,8 +79,8 @@ STRING_TYPES = ("string", "template_string")
 def known_key_finding(file: SourceFile, literal: Literal, planner: EnvPlanner, in_browser: bool) -> Finding | None:
     """SEC-001 / SEC-003: the string matches a known key format."""
     for pattern in KNOWN_PATTERNS:
-        match = pattern.regex.search(literal.value)
-        if match is None or obviously_fake(match.group(0)):
+        match = pattern.find(literal.value)
+        if match is None:
             continue
         title = f"Exposed {pattern.label}"
         line = line_of(literal.node)
@@ -109,7 +109,9 @@ def secret_name_finding(file: SourceFile, literal: Literal, planner: EnvPlanner,
     last_word = to_env_name(name).split("_")[-1].lower()  # [-1] is the last item of a list
     if last_word in NOT_SECRET_LAST_WORDS:
         return None  # e.g. TOKEN_URL holds a URL, not a token
-    if not looks_like_secret(literal.value) or not literal.rewritable:
+    if not (looks_like_secret(literal.value) or guessable_secret(name, literal.value)) or not literal.rewritable:
+        return None
+    if is_password_hash(name, literal.value):
         return None
     if public_by_design(file, literal.node):
         return None
@@ -251,6 +253,17 @@ class SecretPattern:
     env_name: str       # the environment variable it's moved to
     regex: re.Pattern   # a compiled regex, like Pattern.compile() in Java
     fixable: bool = True
+    # An extra test the match must pass (for formats a regex alone can't tell apart).
+    check: object = None
+
+    def find(self, text: str):
+        """The match, or None. Made-up keys and failed extra tests don't count."""
+        match = self.regex.search(text)
+        if match is None or obviously_fake(match.group(0)):
+            return None
+        if self.check is not None and not self.check(match.group(0)):
+            return None
+        return match
 
 
 # r"..." is a RAW string: backslashes are kept as-is, so you write \d rather
@@ -268,7 +281,28 @@ def obviously_fake(key: str) -> bool:
     return FAKE_KEY.search(key) is not None
 
 
+def is_service_role_jwt(token: str) -> bool:
+    """Is this a Supabase SERVICE-ROLE key? (A token whose middle part says role: service_role.)
+
+    Supabase's public "anon" key looks the same but says role: anon, and is
+    meant to be public. The service-role key skips ALL the database's rules.
+    """
+    import base64
+    import json
+    try:
+        middle = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(middle + "=" * (-len(middle) % 4)))
+    except (IndexError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("role") == "service_role"
+
+
 KNOWN_PATTERNS = [
+    SecretPattern("Supabase secret key", "SUPABASE_SECRET_KEY",
+                  re.compile(r"(?<![0-9A-Za-z])sb_secret_[0-9A-Za-z_-]{20,}")),
+    SecretPattern("Supabase service-role key", "SUPABASE_SERVICE_ROLE_KEY",
+                  re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+                  check=is_service_role_jwt),
     SecretPattern("Stripe secret key", "STRIPE_SECRET_KEY",
                   re.compile(r"(?<![0-9A-Za-z])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}")),
     SecretPattern("AWS access key", "AWS_ACCESS_KEY_ID",
@@ -314,6 +348,31 @@ PLACEHOLDER = re.compile(
 )
 
 
+HEX_HASH = re.compile(r"^(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}|[a-fA-F0-9]{128})$")
+
+
+# Names that ALWAYS hold a real secret (a key that signs logins or encrypts data).
+STRONG_SECRET_NAME = re.compile(
+    r"(?i)jwt[_-]?(?:secret|key)|secret[_-]?key|session[_-]?secret|signing[_-]?key|app[_-]?secret|"
+    r"encryption[_-]?key|cookie[_-]?secret|auth[_-]?secret|token[_-]?secret|^secret$")
+
+
+def guessable_secret(name: str, value: str) -> bool:
+    """A word-only value under a name that must hold a real secret.
+
+    The usual check skips word-only values (they're often labels, like
+    password: "Password"). But under a name like JWT_SECRET, a value such as
+    'zero-health-super-secret-key' isn't a label: it's a secret anyone can guess.
+    """
+    return bool(STRONG_SECRET_NAME.search(name)) and len(value) >= 8 and not re.search(r"\s", value) \
+        and not re.fullmatch(r"[A-Z0-9_]+", value) and not REFERENCE.match(value) and not PLACEHOLDER.search(value)
+
+
+def is_password_hash(name: str, value: str) -> bool:
+    """"password": "0b14d501a594..." (64 hex characters) is a stored hash, not a password."""
+    return bool(re.search(r"(?i)passw|pwd", name)) and HEX_HASH.match(value) is not None
+
+
 def fingerprint_of(value: str) -> str:
     """A one-way scramble of a secret, used only to spot the same secret twice."""
     import hashlib
@@ -353,6 +412,10 @@ def looks_like_secret(value: str) -> bool:
         return False                          # a text-matching pattern: yearToken = `\b\d{4}\b`
     if VERSION_LIKE.search(value):
         return False                          # a library and its version: io.jsonwebtoken:jjwt-api:0.11.2
+    if CONTROLLER_ACTION.match(value):
+        return False                          # a Rails route target: "password_resets#forgot_password"
+    if CSS_CLASS.match(value):
+        return False                          # a Tailwind CSS class: 'Rare Secret': 'text-orange-400'
     return len(set(value)) > 2                # "xxxxxxxx", "00000000"
 
 
@@ -361,7 +424,14 @@ VALIDATION_RULE = re.compile(r"\b(?:required|nullable|sometimes|confirmed)\b")
 
 # A REFERENCE to a secret stored somewhere else, which is exactly right:
 #   $DB_PASSWORD   ${SECRET}   %API_KEY%   {{ secrets.TOKEN }}
-REFERENCE = re.compile(r"^(?:\$\{?[A-Za-z_]\w*\}?(?::\S*)?|%[A-Za-z_]\w*%|\{\{.*\}\})$")
+REFERENCE = re.compile(r"^(?:\$\{?[A-Za-z_]\w*\}?(?::\S*)?|%[A-Za-z_]\w*%|\{\{.*\}\}|env\([A-Za-z_]\w*\))$")
+
+# A Tailwind CSS class name:  text-orange-400   bg-slate-900/50
+CSS_CLASS = re.compile(r"^(?:text|bg|border|ring|from|to|via|fill|stroke|shadow|outline|decoration|divide|"
+                       r"placeholder|accent|caret)-[a-z]+(?:-\d{2,3})?(?:/\d+)?$")
+
+# A web route's target, controller#action (Rails):  "password_resets#forgot_password"
+CONTROLLER_ACTION = re.compile(r"^[a-z_/]+#[a-z_]+[!?]?$")
 
 # Ends in a version number, like a library name:  jjwt-jackson:0.11.2   lodash@4.17.21
 VERSION_LIKE = re.compile(r"[:@/v-]\d+\.\d+\.\d+(?:[-.][\w.]+)?['\",]*$")

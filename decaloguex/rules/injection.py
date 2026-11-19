@@ -54,6 +54,8 @@ from decaloguex.models import Finding, Fix, Severity, TextEdit
 
 VISITOR_INPUT = {
     "js": r"\breq\.(?:body|query|params|headers|cookies|files?)\b|\brequest\.(?:body|query|params)\b"
+          r"|\b(?:req|request)\.(?:json|formData|text)\s*\(|\bnextUrl\.searchParams\b|\bsearchParams\.get\("
+          r"|\b(?:req|request)\.(?:url|nextUrl)\b|\w\(\s*(?:await\s+)?(?:req|request)\s*[,)]"
           r"|\bctx\.(?:request|query|params)\b|\bevent\.(?:body|queryStringParameters|pathParameters)\b"
           r"|searchParams\.get\(|formData\.get\(|\blocation\.(?:search|hash)\b",
     "python": r"\brequest\.(?:GET|POST|args|form|json|data|values|files|query_params|body|cookies|headers|get_json)\b",
@@ -73,6 +75,10 @@ ANNOTATED_PARAMETER = re.compile(
 PY_ROUTE = re.compile(r"@\w+\.(?:route|get|post|put|patch|delete|api_route)\(|@(?:api_view|action)\b")
 NOT_NAMES = {"const", "let", "var", "final", "val", "String", "int", "long", "Integer", "string", "auto",
              "self", "this", "new", "return", "await", "public", "private", "static", "def", "if", "for"}
+# Helpers that check or clean a value: its result isn't raw visitor input any more.
+# (Not schema checks like zod's safeParse or joi's validate: they confirm the TYPE,
+#  so a URL or file path that passes them is still exactly what the visitor typed.)
+CLEANED = re.compile(r"(?i)\b(?!safe_?parse)\w*(?:safe|resolve|sanitize|clean|secure|whitelist|allowlist|basename)\w*\s*\(")
 ASSIGNMENT = re.compile(r"^\s*(?P<lhs>[^=;()]+?)\s*(?::=|\+=|\.=|=)(?![=>~])(?P<rhs>.*)$")
 
 
@@ -90,6 +96,8 @@ def visitor_names(scope: str, family: str, parameters: str) -> set[str]:
             if match is None:
                 continue
             rhs = match.group("rhs")
+            if CLEANED.search(rhs):
+                continue  # path = resolve_scan_path(x): the helper checks it
             unpacked_request = family == "js" and re.fullmatch(r"\s*(?:req|request|ctx\.request)\s*;?\s*", rhs)
             if unpacked_request or source.search(rhs) or any(re.search(rf"(?<![\w$]){re.escape(n)}\b", rhs) for n in names):
                 for name in re.findall(r"\$?[A-Za-z_]\w*", match.group("lhs")):
@@ -140,7 +148,7 @@ DANGERS = [
     *danger("EVAL-001", "ruby", r"(?<![.\w])(?:eval|instance_eval|class_eval|module_eval)\s*[\( ]|\.(?:send|public_send|constantize)\(\s*params"),
 
     # --- PATH-001: a file picked by the visitor --------------------------------------
-    *danger("PATH-001", "js", r"\b(?:sendFile|download|readFile|readFileSync|createReadStream|unlink|unlinkSync|writeFile|writeFileSync)\s*\("),
+    *danger("PATH-001", "js", r"\b(?:sendFile|download|readFile|readFileSync|createReadStream|unlink|unlinkSync|writeFile|writeFileSync|readdir|readdirSync)\s*\("),
     *danger("PATH-001", "python", r"(?<![.\w])open\s*\(|\bsend_file\s*\(|\bos\.(?:remove|unlink)\(|\bFileResponse\s*\("),
     *danger("PATH-001", "php", r"\b(?:include|require|include_once|require_once)\b\s*\(?|\b(?:file_get_contents|fopen|readfile|file|unlink|file_put_contents)\s*\("),
     *danger("PATH-001", "ruby", r"\bsend_file\s*\(?|\bFile\.(?:read|open|delete|binread)\(|\brender\s+file:"),
@@ -163,7 +171,8 @@ DANGERS = [
     *danger("NOSQL-001", "python", r"['\"]\$where['\"]\s*:\s*[^,}]*(?:\+|%|\.format|f['\"])", needs_input=False),
 
     # --- REDIRECT-001: open redirect ------------------------------------------------------
-    *danger("REDIRECT-001", "js", r"\bres\.redirect\(|\bctx\.redirect\(|\bwindow\.location(?:\.href)?\s*=|\blocation\.(?:replace|assign)\("),
+    *danger("REDIRECT-001", "js", r"\bres\.redirect\(|\bctx\.redirect\(|\bwindow\.location(?:\.href)?\s*=|\blocation\.(?:replace|assign)\("
+                                  r"|\brouter\.(?:push|replace)\(|(?<![.\w])redirect\s*\(|NextResponse\.redirect\("),
     *danger("REDIRECT-001", "python", r"\b(?:redirect|HttpResponseRedirect|RedirectResponse)\s*\("),
     *danger("REDIRECT-001", "php", r"header\s*\(\s*['\"]Location:|->(?:to|away)\s*\(|redirect\s*\("),
     *danger("REDIRECT-001", "ruby", r"\bredirect_to\b"),
@@ -172,7 +181,7 @@ DANGERS = [
     *danger("REDIRECT-001", "csharp", r"\bRedirect\s*\("),
 
     # --- SSRF-001: the server fetches the visitor's web address ------------------------
-    *danger("SSRF-001", "js", r"(?<![.\w])fetch\s*\(|\baxios(?:\.\w+)?\s*\(|(?<![.\w])got\s*\(|\bhttps?\.(?:get|request)\s*\(|\b(?:needle|superagent)(?:\.(?:get|post|put|request))?\s*\(|(?<![.\w])request(?:\.\w+)?\s*\(\s*(?!['\"])"),
+    *danger("SSRF-001", "js", r"(?<![.\w])fetch\s*\(|\baxios(?:\.\w+)?\s*\(|(?<![.\w])got\s*\(|\bhttps?\.(?:get|request)\s*\(|\b(?:needle|superagent)(?:\.(?:get|post|put|request))?\s*\(|(?<![.\w])request(?:\.(?:get|post|put|patch|del|head))?\s*\(\s*(?!['\"])"),
     *danger("SSRF-001", "python", r"\brequests\.(?:get|post|put|head|request)\s*\(|\burlopen\s*\(|\bhttpx\.(?:get|post|request)\s*\("),
     *danger("SSRF-001", "php", r"\bcurl_init\s*\(|CURLOPT_URL|\bfile_get_contents\s*\(\s*\$_"),
     *danger("SSRF-001", "ruby", r"\bURI\.open\(|(?<![.\w])open\(\s*params|\bNet::HTTP\.get\w*\(|\bHTTParty\.\w+\(|\bFaraday\.\w+\("),
@@ -208,7 +217,7 @@ DANGERS = [
 #   redirect_to admin_user_path(params[:id])   url_for("view")   reverse("home")   route('login')
 OWN_SITE_ADDRESS = re.compile(
     r"^\w[\w.]*\s*\(?\s*(?:[\w.:]+_(?:path|url)\b|url_for\(|reverse(?:_lazy)?\(|route\(|to_route\(|back\(|"
-    r"['\"]/(?!/)|\w*(?:safe|valid|allowed)\w*)")
+    r"['\"`]/(?!/)|new\s+URL\(\s*['\"`]/(?!/)|\w*(?:safe|valid|allowed)\w*)")
 
 # ...and addresses made from a PATH on your own site (no web address of another site
 # can get in):  @article.path   URI.parse(x).path   request.path   redirect_to(options.merge(...))
@@ -321,6 +330,7 @@ def check(file: SourceFile, comments: list[tuple[int, int]], runs_on_server: boo
     scopes: dict[tuple[int, int], set[str]] = {}
     findings = []
     seen = set()
+    where = Positions(source)
     for item in dangers:
         if item.rule == "SSRF-001" and family == "js" and not runs_on_server:
             continue  # fetch() in a web page runs in the visitor's own browser
@@ -328,10 +338,9 @@ def check(file: SourceFile, comments: list[tuple[int, int]], runs_on_server: boo
             continue
         for match in item.regex.finditer(source):
             position = match.start()
-            byte_position = byte_offset(source, position)  # the code tree counts in bytes
+            line_number, byte_position = where.line_and_byte(position)  # the code tree counts in bytes
             if any(s <= byte_position < e for s, e in comments):
                 continue
-            line_number = source.count("\n", 0, position) + 1
             if (item.rule, line_number) in seen:
                 continue
             line_end = source.find("\n", position)
@@ -344,13 +353,17 @@ def check(file: SourceFile, comments: list[tuple[int, int]], runs_on_server: boo
             if item.rule == "CSRF-001" and csrf_off_on_purpose(file, line_text, source):
                 continue
             if item.needs_input:
-                start, end, function = next(((s, e, n) for s, e, n in functions if s <= byte_position < e),
-                                            (0, len(file.source), None))
-                key = (start, end)
-                if key not in scopes:
-                    scope_text = file.source[start:end].decode("utf-8", "replace")
-                    scopes[key] = visitor_names(scope_text, family, parameters_of(function, file, family))
-                if not reaches(rest, family, scopes[key]):
+                # Every function the line sits in, from the innermost outwards: a value
+                # read in a component can be used in a smaller function inside it.
+                enclosing = [(s, e, n) for s, e, n in functions if s <= byte_position < e] or [(0, len(file.source), None)]
+                names: set[str] = set()
+                for start, end, function in enclosing:
+                    key = (start, end)
+                    if key not in scopes:
+                        scope_text = file.source[start:end].decode("utf-8", "replace")
+                        scopes[key] = visitor_names(scope_text, family, parameters_of(function, file, family))
+                    names |= scopes[key]
+                if not reaches(rest, family, names):
                     continue
             seen.add((item.rule, line_number))
             fix = yaml_fix(file, match, byte_position) if item.rule == "DESER-001" and family == "python" else None
@@ -358,6 +371,10 @@ def check(file: SourceFile, comments: list[tuple[int, int]], runs_on_server: boo
                                     SEVERITY.get(item.rule, Severity.CRITICAL),
                                     fix=fix, note="" if fix else NOTES[item.rule]))
     return findings
+
+
+def text_of(node) -> str:
+    return node.text.decode("utf-8", "replace") if node is not None else ""
 
 
 def parameters_of(function, file: SourceFile, family: str) -> str:
@@ -369,7 +386,7 @@ def parameters_of(function, file: SourceFile, family: str) -> str:
     if family == "python":
         decorated = function.parent is not None and function.parent.type == "decorated_definition"
         decorators = file.source[function.parent.start_byte:function.start_byte].decode("utf-8", "replace") if decorated else ""
-        params = re.search(r"\((.*)\)", head, re.DOTALL)
+        params = re.match(r"\s*(?:async\s+)?def\s+\w+\s*\((.*?)\)\s*(?:->[^:]*)?:", text_of(function), re.DOTALL)
         params_text = params.group(1) if params else ""
         # A web route's own parameters come from the web address; so do a Django view's
         # (its first parameter is the request).
@@ -379,9 +396,34 @@ def parameters_of(function, file: SourceFile, family: str) -> str:
     return head
 
 
-def byte_offset(text: str, position: int) -> int:
-    """Where character number `position` starts, counted in bytes (é is 2 bytes, for example)."""
-    return len(text[:position].encode("utf-8")) if not text.isascii() else position
+class Positions:
+    """Turns a character position into (line number, byte position), quickly.
+
+    The text is searched as characters, but the code tree counts bytes (é is
+    2 bytes). Working that out from the start of the file for every match was
+    slow on big files, so the start of every line is worked out once, up front.
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+        self.ascii = text.isascii()
+        self.line_starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+        if not self.ascii:
+            self.byte_starts = []
+            total = 0
+            previous = 0
+            for start in self.line_starts:
+                total += len(text[previous:start].encode("utf-8"))
+                self.byte_starts.append(total)
+                previous = start
+
+    def line_and_byte(self, position: int) -> tuple[int, int]:
+        import bisect
+        line = bisect.bisect_right(self.line_starts, position)  # 1-based line number
+        if self.ascii:
+            return line, position
+        start = self.line_starts[line - 1]
+        return line, self.byte_starts[line - 1] + len(self.text[start:position].encode("utf-8"))
 
 
 def yaml_fix(file: SourceFile, match: re.Match, start: int) -> Fix | None:

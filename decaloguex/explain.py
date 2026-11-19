@@ -109,6 +109,52 @@ EXPLANATIONS = {
         "Other websites can submit forms on your site as your logged-in visitors.",
         "I'll show you when it's safe to switch off, and how to turn it back on.",
     ),
+    "SEC-005": Explanation(
+        "🔑", "A secret key with a public name",
+        "Names starting with NEXT_PUBLIC_, VITE_ or REACT_APP_ are built into the page every visitor "
+        "downloads, so this secret can be read by anyone.",
+        "I'll show you how to keep it on your server instead.",
+    ),
+    "JWT-001": Explanation(
+        "🎫", "Fake logins would be accepted",
+        "Login tokens are accepted without checking their signature, so anyone can make one saying "
+        "they're any user, even an admin.",
+        "I'll show you the one setting that makes the check happen.",
+    ),
+    "UPLOAD-001": Explanation(
+        "📎", "Uploads aren't checked",
+        "Files people upload are saved without checking what they are, so someone could upload a script "
+        "or a huge file.",
+        "I'll show you how to only accept the files you expect.",
+    ),
+    "RAND-001": Explanation(
+        "🎲", "Codes that can be guessed",
+        "This secret code or token is made with random numbers that can be predicted.",
+        "I'll show you the secure random-number tool to use instead.",
+    ),
+    "AI-001": Explanation(
+        "🤖", "Your AI key is in the browser",
+        "The AI service's key is sent to every visitor, so anyone can copy it and run up your bill.",
+        "I'll show you how to call the AI from your server instead.",
+    ),
+    "AI-002": Explanation(
+        "🤖", "AI answers are trusted blindly",
+        "What the AI writes is put straight into the page, the database or code that runs, and a visitor "
+        "can trick the AI into writing an attack.",
+        "I'll show you how to treat AI answers like anything else a visitor sends.",
+    ),
+    "AI-003": Explanation(
+        "💸", "Nothing stops a huge AI bill",
+        "Nothing limits how often people can use your AI features, so one script could make thousands of "
+        "requests and run up a big bill.",
+        "I'll show you how to add a limit.",
+    ),
+    "RLS-001": Explanation(
+        "🗄️", "Your database is open to everyone",
+        "This database table has no access rules (or a rule that lets anyone change it), so anyone with "
+        "your app's public key can read or change the data.",
+        "I'll show you the rules to add so people only see their own data.",
+    ),
     "SEC-004": Explanation(
         "🔑", "Backup secret anyone can guess",
         "If the real secret is ever missing, your app quietly uses a backup word that's written in your "

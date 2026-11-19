@@ -83,13 +83,17 @@ PUBLIC_CONFIG_FILES = {"google-services.json", "GoogleService-Info.plist", "fire
 TEST_FILE_NAMES = re.compile(
     r"(?:"
     r"_test\.(?:go|py|rb|kt|swift)"             # gitea_test.go, test_app_test.py
-    r"|^test_\w+\.py|^conftest\.py"              # Python
+    r"|^test_\w+\.py|^conftest\.py|^tests?\.py|_tests\.py"  # Python (Django keeps its tests in tests.py)
     r"|(?:Test|Tests|Spec|IT)\.(?:java|kt|cs|php|swift|scala)"  # UserTest.java, AppTests.cs
     r"|\.(?:test|spec|cy|e2e)\.[cm]?[jt]sx?"    # app.test.js, auth.spec.ts
+    r"|\.(?:test|spec)\.[\w.]+\.[cm]?[jt]sx?"    # _integration.test.utils.ts
+    r"|_test\.(?:sh|bash|js|ts|php)"              # backend_test.sh
+    r"|(?:^|[-_.])seeds?(?:[-_.]\w+)?\.(?:js|ts|py|rb|php)"  # update-seed.ts
     r"|_spec\.rb"                                # Ruby RSpec
     r"|\.stories\.[jt]sx?"                       # Storybook examples
     r"|^(?:Setup)?(?:Dummy|Fake|Seed)\w*\.\w+"     # SetupDummyAccount.php, SeedData.cs
     r"|^seeds?\.\w+"                              # db/seeds.rb
+    r"|^(?:db[-_.](?:reset|seed|populate|setup)|(?:reset|seed|populate)[-_.]db|demo[-_]?data)[-_.\w]*\.(?:js|ts|py|rb|php)"  # db-reset.js
     r"|[-_.](?:samples?|examples?)\.\w+"           # application-secret-samples.yml, config.example.json
     r"|^(?:development|test|testing|dev|local)\.(?:rb|py|exs|json|ya?ml|toml|ini)"  # config/environments/test.rb
     r")$"
@@ -101,6 +105,8 @@ def is_test_or_example(rel_path: str) -> bool:
     *folders, name = rel_path.split("/")  # all but the last part, then the last part
     if any(folder.lower() in TEST_FOLDERS or TEST_FOLDER_ENDING.search(folder) for folder in folders):
         return True
+    if rel_path.endswith("config/routes.rb"):
+        return True  # web addresses and controller names: "forgot_password" => "password_resets#..."
     if name in PUBLIC_CONFIG_FILES:
         return True  # Firebase's app config: its "API key" is public by design
     return bool(TEST_FILE_NAMES.search(name))
@@ -189,6 +195,8 @@ class ProjectInfo:
     cookie_logins: bool = False
     # Has this Rails app switched off to_json's HTML escaping? (see rules/web.py)
     rails_json_unescaped: bool = False
+    # Does anything in the project limit how often requests can be made? (see rules/appsec.py)
+    rate_limited: bool = False
 
 
 def normalize_py_name(name: str) -> str:

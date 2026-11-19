@@ -32,7 +32,7 @@ from pathlib import Path
 from decaloguex import languages, project
 from decaloguex.blindspots import MAX_FILE_SIZE, BlindSpots, unsupported_language
 from decaloguex.models import AppendEdit, Finding, TextEdit
-from decaloguex.rules import async_, auth, config_files, injection, errors, fallbacks, gitignore, other_languages, secrets, sql, web
+from decaloguex.rules import appsec, async_, auth, config_files, injection, supabase, errors, fallbacks, gitignore, other_languages, secrets, sql, web
 from decaloguex.undo import Backup, fingerprint
 
 
@@ -79,6 +79,7 @@ def scan(target: Path, on_progress: Callable[[int, int, Path], None] | None = No
 
     result = ScanResult(root, 0, 0.0, [])
     code_files, settings_files, template_files = sort_files(target, root, result.blind_spots)
+    env_files, sql_files = other_files_to_check(target, root)
 
     total = len(code_files) + len(settings_files) + len(template_files)
     done = 0
@@ -107,6 +108,13 @@ def scan(target: Path, on_progress: Callable[[int, int, Path], None] | None = No
         if on_progress is not None:
             on_progress(done, total, path)
 
+    # .env files: secrets with PUBLIC names (NEXT_PUBLIC_..., VITE_...) end up in the page.
+    for path in env_files:
+        result.findings += safely(result, root, path, "appsec", lambda: appsec.check_env_file(path))
+    # Supabase SQL files, checked together: tables without access rules (RLS).
+    if sql_files:
+        result.findings += safely(result, root, root, "supabase", lambda: supabase.check(sql_files))
+
     # Now that every file has been seen, we know whether the app loads .env.
     # Where it doesn't, moving a secret there would break the app, so those
     # fixes become "What to do" cards instead.
@@ -116,6 +124,9 @@ def scan(target: Path, on_progress: Callable[[int, int, Path], None] | None = No
 
     # CORS only matters when the settings also let logins be sent (see web.py).
     result.findings = web.only_risky_cors(result.findings)
+    # AI-003 only matters if nothing in the project limits how often it can be used.
+    result.findings = appsec.without_ai_cards_if_rate_limited(result.findings, info.rate_limited)
+
     # Rails' to_json is safe in pages unless the app switched its escaping off.
     result.findings = web.without_safe_rails_json(result.findings, info.rails_json_unescaped)
 
@@ -148,6 +159,8 @@ def check_code_file(result: ScanResult, root: Path, path: Path, planner, info) -
         info.env_loaders.add(file.lang.family)  # this file loads .env (see project.py)
     if file.lang.family == "ruby" and web.RAILS_JSON_UNSAFE.search(file.source):
         info.rails_json_unescaped = True
+    if not info.rate_limited and appsec.RATE_LIMIT.search(file.source):
+        info.rate_limited = True  # something limits requests (see appsec.py, AI-003)
     is_test = project.is_test_or_example(relative(root, path))
     if is_test:
         result.blind_spots.test_files += 1
@@ -172,6 +185,13 @@ def check_code_file(result: ScanResult, root: Path, path: Path, planner, info) -
     # XML, weak password hashing and CSRF: every language (see rules/injection.py).
     on_server = async_.runs_on_server(file) if file.lang.family == "js" else True
     rules["injection"] = lambda: injection.check(file, web.comment_ranges(file), on_server)
+    # Public-named secrets, unchecked login tokens, uploads, weak random numbers, AI mistakes.
+    rules["appsec"] = lambda: appsec.check(file, web.comment_ranges(file), on_server)
+    if is_test:
+        # Only real key formats are kept from test files (see only_real_keys), so
+        # only the rules that find keys need to run. Big projects have thousands of
+        # test files, so this saves a lot of time.
+        rules = {name: rule for name, rule in rules.items() if name in ("secrets", "other-languages")}
 
     found = []
     for rule_name, run_rule in rules.items():
@@ -216,12 +236,16 @@ REVIEWED_FOR = {
 # (A finding with an automatic fix is always "sure": DecalogueX only fixes
 # what it's certain about.)
 
-WORTH_A_LOOK_RULES = {"XSS-001", "REDIRECT-001", "CSRF-001", "AUTH-002"}
+WORTH_A_LOOK_RULES = {"XSS-001", "REDIRECT-001", "CSRF-001", "AUTH-002", "UPLOAD-001", "AI-003"}
 
 
 def is_worth_a_look(finding: Finding) -> bool:
     if finding.fix is not None:
         return False
+    if finding.rule_id == "RLS-001" and finding.note == supabase.OPEN_INSERT_NOTE:
+        return True  # "anyone can add rows" is sometimes meant
+    if finding.rule_id == "XSS-001" and finding.note == web.USER_CONTENT_NOTE:
+        return False  # HTML from what users write: a real, common hole
     if finding.rule_id in WORTH_A_LOOK_RULES:
         return True
     # An error sent with a status chosen while the app runs: maybe a deliberate 404.
@@ -358,6 +382,26 @@ def sort_files(target: Path, root: Path, spots: BlindSpots) -> tuple[list[Path],
         else:
             bucket.append(path)
     return code, settings, templates
+
+
+def other_files_to_check(target: Path, root: Path) -> tuple[list[Path], list[Path]]:
+    """.env files and Supabase SQL files: not code, but some rules read them.
+
+    Test and example folders are left out, like everywhere else.
+    """
+    if target.is_file():
+        return [], []
+    env_files, sql_files = [], []
+    for path in project.iter_files(target):
+        rel = relative(root, path)
+        if project.is_test_or_example(rel):
+            continue
+        name = path.name.lower()
+        if name.startswith(".env") and path.stat().st_size < 200_000:
+            env_files.append(path)
+        elif name.endswith(".sql") and "supabase" in rel.lower().split("/"):
+            sql_files.append(path)
+    return env_files, sql_files
 
 
 def relative(root: Path, path: Path) -> str:

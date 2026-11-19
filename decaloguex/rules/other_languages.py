@@ -311,8 +311,8 @@ def in_constant(node: Node, family: str = "") -> bool:
 def known_key(file, profile, planner, node, value, rewritable) -> Finding | None:
     """SEC-001: the string matches a known key format (Stripe, AWS, ...)."""
     for pattern in secrets.KNOWN_PATTERNS:
-        match = pattern.regex.search(value)
-        if match is None or secrets.obviously_fake(match.group(0)):
+        match = pattern.find(value)
+        if match is None:
             continue
         title = f"Exposed {pattern.label}"
         if not pattern.fixable:
@@ -332,10 +332,12 @@ def secret_named(file, profile, planner, node, value, rewritable) -> Finding | N
         return None
     if secrets.to_env_name(name).split("_")[-1].lower() in secrets.NOT_SECRET_LAST_WORDS:
         return None
-    if not secrets.looks_like_secret(value):
+    if not (secrets.looks_like_secret(value) or secrets.guessable_secret(name, value)):
         return None
     if is_built_at_runtime(node, profile):
         return None  # "1!aA#{SecureRandom.hex(12)}": made fresh each time, not a fixed secret
+    if secrets.is_password_hash(name, value):
+        return None  # a stored hash, not the password itself
     kind = "password" if re.search(r"passw|pwd", name, re.IGNORECASE) else "secret"
     title = f"Hard-coded {kind} in '{name}'"
     if not rewritable:
@@ -496,7 +498,7 @@ def check_sql(file: SourceFile, profile: Profile, info: ProjectInfo) -> list[Fin
         preview = "".join(p.text if p.text is not None else "?" for p in parts)
         if not looks_like_sql(preview) and not is_where_clause(node, preview):
             continue
-        if only_names_inserted(parts, text):
+        if only_names_inserted(parts, text, file.source.decode("utf-8", "replace")):
             continue  # "DELETE FROM " + tableName: a name from the app, not a visitor
         finding = sql_finding(file, profile, info, node, parts)
         if finding is not None:

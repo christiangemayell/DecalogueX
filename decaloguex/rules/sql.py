@@ -88,7 +88,7 @@ def check(file: SourceFile, info: ProjectInfo) -> list[Finding]:
         built = sql_string(node, file)          # steps 1 and 2a
         if built is None:
             continue
-        if only_names_inserted(built.parts, text):
+        if only_names_inserted(built.parts, text, file.source.decode("utf-8", "replace")):
             continue  # "DELETE FROM " + tableName: a name from the app, not a visitor
         finding = query_finding(file, built, drivers)
         if finding is not None:
@@ -461,7 +461,17 @@ NAME_HOLDER = re.compile(
     r"(?i)^[\w.$>-]*?(?:table|column|col|cols|sequence|seq|index|idx|schema|constraint)(?:_?name|s|name_?quoted|quoted)?(?:\(\))?$")
 
 
-def only_names_inserted(parts: list[Part], file_text) -> bool:
+def fixed_text_variable(name: str, source: str) -> bool:
+    """Is `name` only ever set to fixed text in this file?  For example:  allowed_sql = "('Normal', 'Holo')" """
+    if not re.fullmatch(r"[A-Za-z_]\w*", name):
+        return False
+    word = re.escape(name)
+    assignments = re.findall(rf"(?m)^\s*(?:(?:const|let|var|final|static)\s+)?{word}\s*(?::[^=\n]+)?=(?!=)(.*)$", source)
+    fixed = r"\s*(?:\"[^\"{}$]*\"|'[^'{}$]*')\s*;?\s*"
+    return bool(assignments) and all(re.fullmatch(fixed, a) for a in assignments)
+
+
+def only_names_inserted(parts: list[Part], file_text, source: str = "") -> bool:
     """Is every value put into this SQL a table/column/sequence name?
 
     Either its variable is named like one (tableName), or it sits where SQL
@@ -479,7 +489,8 @@ def only_names_inserted(parts: list[Part], file_text) -> bool:
             return False
         before = parts[index - 1].text if index > 0 and parts[index - 1].text else ""
         in_name_quotes = before.endswith(("{{", "[[", "`")) or bool(TABLE_IN_QUOTES.search(before))
-        values.append(in_name_quotes or bool(NAME_HOLDER.match(value)) or bool(ALREADY_ESCAPED.search(value)))
+        values.append(in_name_quotes or bool(NAME_HOLDER.match(value)) or bool(ALREADY_ESCAPED.search(value))
+                      or (bool(source) and fixed_text_variable(value, source)))
     return bool(values) and all(values)
 
 

@@ -129,8 +129,8 @@ def check_line(path: Path, number: int, line: str, is_json: bool | None = None) 
 
     # SEC-001: a known key format anywhere on the line.
     for pattern in secrets.KNOWN_PATTERNS:
-        match = pattern.regex.search(line)
-        if match and not secrets.obviously_fake(match.group(0)):
+        match = pattern.find(line)
+        if match:
             rule_id = "SEC-001" if pattern.fixable else "SEC-003"
             return Finding(rule_id, f"Exposed {pattern.label} in a settings file", path, number,
                            secrets.IMPACT, Severity.CRITICAL, note=NOTE,
@@ -144,11 +144,15 @@ def check_line(path: Path, number: int, line: str, is_json: bool | None = None) 
         candidates += list(JSON_PAIR.finditer(line))
     for match in candidates:
         name, value = match.group("name"), match.group("value")
+        start, end = match.start("value"), match.end("value")
+        quoted = start > 0 and line[start - 1] in "\"'"
+        if quoted and end < len(line) and line[end] not in "\"'":
+            continue  # the quoted text carries on past a space: a sentence, not a secret
         if not secrets.SECRET_NAME.search(name):
             continue
         if secrets.to_env_name(name).split("_")[-1].lower() in secrets.NOT_SECRET_LAST_WORDS:
             continue
-        if secrets.looks_like_secret(value):
+        if secrets.looks_like_secret(value) and not secrets.is_password_hash(name, value):
             kind = "password" if re.search(r"passw|pwd", name, re.IGNORECASE) else "secret"
             return Finding("SEC-002", f"Hard-coded {kind} '{name}' in a settings file", path, number,
                            secrets.IMPACT, Severity.CRITICAL, note=NOTE, same_as=secrets.fingerprint_of(value))

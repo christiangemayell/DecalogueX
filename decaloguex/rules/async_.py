@@ -311,9 +311,20 @@ def runs_on_server(file: SourceFile) -> bool:
     """
     if file.lang.embedded:
         return False  # a <script> in a web page
+    if CERTAINLY_SERVER.search(file.source):
+        # An Express server that sends web pages has "document." inside its HTML
+        # strings, but it's still a server (found in Zero-Health's server.js).
+        return True
     if secrets.USE_CLIENT.search(file.source) or secrets.BROWSER_ONLY.search(file.source):
         return False  # marked as browser code, or uses things only a browser has
     return bool(SERVER_SIGNS.search(file.source))
+
+
+# Signs that can only mean a server, whatever else the file mentions.
+CERTAINLY_SERVER = re.compile(
+    rb"""\brequire\(\s*['"](?:express|fastify|koa|http|https|child_process|fs)['"]\s*\)"""
+    rb"""|\bfrom\s+['"](?:express|fastify|koa|hono|node:http|node:fs|child_process)['"]"""
+    rb"""|\bapp\.listen\s*\(|\bhttp\.createServer\s*\(""")
 
 
 def check_missing_catch(file: SourceFile) -> list[Finding]:

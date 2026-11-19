@@ -233,9 +233,15 @@ def js_grow_leak(use: Node) -> Node:
             node = grandparent               # String(err)
         elif parent.type == "template_substitution" and grandparent is not None:
             node = grandparent               # `...${err}...`
-        elif parent.type == "binary_expression" and text(field(parent, "operator")) in ("+", "||", "??"):
-            node = parent                    # "Error: " + err
+        elif parent.type == "binary_expression" and text(field(parent, "operator")) in ("+", "||", "??", "instanceof"):
+            node = parent                    # "Error: " + err     err instanceof Error
         elif parent.type == "parenthesized_expression":
+            node = parent
+        elif parent.type == "ternary_expression" and field(parent, "alternative") != node:
+            # err instanceof Error ? err.message : "Unknown error"
+            # The whole choice becomes the friendly message. (Replacing each part
+            # separately gave  "Something went wrong" instanceof Error ? ...  which
+            # still hid the error but read as nonsense. Found in 4 AI-built apps.)
             node = parent
         else:
             return node
@@ -328,8 +334,11 @@ def js_error_variable(call: Node) -> tuple[str, Node] | None:
         if ancestor.type in JS_FUNCTIONS:
             params = function_params(ancestor)
             first = param_name(params[0]) if params else None
-            # Express recognises an error handler by its FOUR parameters.
-            if len(params) == 4 and first:
+            # Express recognises an error handler by its FOUR parameters. They must
+            # also LOOK like one: (err, req, res, next). A helper such as
+            # createSuccessResponse(data, status, request, headers) also has four,
+            # and "fixing" it would have broken every successful response.
+            if len(params) == 4 and first and looks_like_error_handler([param_name(p) or "" for p in params]):
                 return first, ancestor
             # .catch(err => ...): the function is the argument of a .catch call.
             holder = ancestor.parent.parent if ancestor.parent is not None else None
@@ -337,6 +346,13 @@ def js_error_variable(call: Node) -> tuple[str, Node] | None:
                 return first, ancestor
             return None  # don't look past the nearest function
     return None
+
+
+def looks_like_error_handler(names: list[str]) -> bool:
+    """(err, req, res, next): the first is named like an error, or the last two are res and next."""
+    named_like_error = re.fullmatch(r"(?i)_?(?:err|error|e|ex|exc|exception)", names[0]) is not None
+    express_tail = names[2].lower() in ("res", "response", "reply") and names[3].lower() in ("next", "_next")
+    return named_like_error or express_tail
 
 
 def method_is(call: Node, name: str) -> bool:
