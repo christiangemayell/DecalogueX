@@ -13,7 +13,7 @@ them for you. Change your mind, and `decaloguex undo` puts everything back.
 It checks **JavaScript, TypeScript, Python, PHP, Java, C#, Go, Ruby, Kotlin,
 Swift, HTML, Vue and Svelte**, plus settings files like `.yml` and `.json`.
 
-It's open source (MIT license), and this is a **free early-access version**:
+It's open source (MIT licence), and this is a **free early-access version**:
 a full version is coming soon.
 
 ---
@@ -258,7 +258,7 @@ The full list of what's sent is at the top of `decaloguex/telemetry.py`.
 | `.claude-plugin/` | The files that let Claude Code install the skill |
 | `npm/` | The small launcher behind `npx decaloguex` |
 | `README.md` | This file. |
-| `LICENSE` | The MIT license: anyone may use this, with your name kept on it |
+| `LICENSE` | The MIT licence: anyone may use this, with your name kept on it |
 | `pyproject.toml` | The project's ID card: its name and what it needs to run. |
 | `.gitignore` | The list of files Git should never save, like secrets and junk. |
 | `.venv/` | Python and its add-ons, installed just for this project. Never touch it. |
