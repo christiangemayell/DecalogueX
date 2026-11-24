@@ -20,6 +20,7 @@
 "use strict";
 
 const { spawnSync } = require("child_process");
+const posthog = require("./posthog");
 
 const args = process.argv.slice(2); // what the user typed after "decaloguex"
 
@@ -32,44 +33,76 @@ function works(command, commandArgs) {
   return result.status === 0;
 }
 
-/** Run a command, showing its output, then exit with its exit code. */
-function runAndExit(command, commandArgs) {
+async function exitWithAnalytics(event, properties, exitCode) {
+  if (posthog) {
+    posthog.capture({ event, properties });
+    await posthog.shutdown(3000).catch(() => {});
+  }
+
+  process.exit(exitCode);
+}
+
+/** Run a command, showing its output, then record its outcome before exiting. */
+async function runAndExit(command, commandArgs, runner) {
   const result = spawnSync(command, commandArgs, { stdio: "inherit" });
-  process.exit(result.status === null ? 1 : result.status);
+  const exitCode = result.status === null ? 1 : result.status;
+
+  await exitWithAnalytics(
+    "decaloguex_run_completed",
+    {
+      runner,
+      succeeded: exitCode === 0,
+    },
+    exitCode
+  );
 }
 
-// 1. A Python that already has DecalogueX.
-for (const python of pythons) {
-  if (works(python, ["-c", "import decaloguex"])) {
-    runAndExit(python, ["-m", "decaloguex", ...args]);
+async function main() {
+  // 1. A Python that already has DecalogueX installed.
+  for (const python of pythons) {
+    if (works(python, ["-c", "import decaloguex"])) {
+      await runAndExit(python, ["-m", "decaloguex", ...args], "installed_python");
+      return;
+    }
   }
-}
 
-// 2 and 3. Tools that run Python programs without a permanent install.
-if (works("uvx", ["--version"])) runAndExit("uvx", ["decaloguex", ...args]);
-if (works("pipx", ["--version"])) runAndExit("pipx", ["run", "decaloguex", ...args]);
-
-// 4. Any working Python: install DecalogueX for this user (once), then run it.
-for (const python of pythons) {
-  if (works(python, ["--version"])) {
-    console.error("Setting up DecalogueX (one time only)...");
-    const install = spawnSync(python, ["-m", "pip", "install", "--user", "--quiet", "decaloguex"], {
-      stdio: "inherit",
-    });
-    if (install.status === 0) runAndExit(python, ["-m", "decaloguex", ...args]);
+  // 2 and 3. Tools that run Python programs without a permanent install.
+  if (works("uvx", ["--version"])) {
+    await runAndExit("uvx", ["decaloguex", ...args], "uvx");
+    return;
   }
+
+  if (works("pipx", ["--version"])) {
+    await runAndExit("pipx", ["run", "decaloguex", ...args], "pipx");
+    return;
+  }
+
+  // 4. Any working Python: install DecalogueX for this user (once), then run it.
+  for (const python of pythons) {
+    if (works(python, ["--version"])) {
+      console.error("Setting up DecalogueX (one time only)...");
+      const install = spawnSync(python, ["-m", "pip", "install", "--user", "--quiet", "decaloguex"], {
+        stdio: "inherit",
+      });
+      if (install.status === 0) {
+        await runAndExit(python, ["-m", "decaloguex", ...args], "python_user_install");
+        return;
+      }
+    }
+  }
+
+  console.error(
+    [
+      "",
+      "DecalogueX needs Python 3.10 or newer, and I couldn't find it on this computer.",
+      "",
+      "  1. Install Python from https://www.python.org/downloads/",
+      '     (on Windows, tick "Add python.exe to PATH" during the install)',
+      "  2. Run this command again.",
+      "",
+    ].join("\n")
+  );
+  await exitWithAnalytics("decaloguex_launch_unavailable", { reason: "no_runnable_python" }, 1);
 }
 
-// No Python at all.
-console.error(
-  [
-    "",
-    "DecalogueX needs Python 3.10 or newer, and I couldn't find it on this computer.",
-    "",
-    "  1. Install Python from https://www.python.org/downloads/",
-    '     (on Windows, tick "Add python.exe to PATH" during the install)',
-    "  2. Run this command again.",
-    "",
-  ].join("\n")
-);
-process.exit(1);
+main();
