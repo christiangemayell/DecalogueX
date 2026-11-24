@@ -38,10 +38,9 @@ THE RULES IT FOLLOWS
       if it fails (no internet, say) nothing happens.
 
 WHERE THE DATA GOES
-    PostHog (posthog.com), on its free plan. Put your project's API key in
-    POSTHOG_API_KEY below. Until then, nothing is sent at all.
-    In PostHog's project settings, turn on "Discard client IP data" so
-    visitors' IP addresses aren't stored either.
+    PostHog (posthog.com), on its free plan, stored in the EU. The project's
+    key is in POSTHOG_API_KEY below. "Discard client IP data" is turned on
+    in PostHog's project settings, so IP addresses aren't stored either.
 """
 
 from __future__ import annotations
@@ -61,8 +60,8 @@ from decaloguex import __version__
 
 # Paste your PostHog "Project API key" here (it starts with phc_). It's safe
 # to publish: it can only SEND stats, never read them.
-POSTHOG_API_KEY = ""
-POSTHOG_URL = "https://us.i.posthog.com/i/v0/e/"  # use eu.i.posthog.com for an EU project
+POSTHOG_API_KEY = "phc_pFK8eYDjaBNHhanQNBYdKVd7uqJLLmkYCPANYf8FNMGt"
+POSTHOG_URL = "https://eu.i.posthog.com/i/v0/e/"  # the project is on PostHog's EU Cloud
 
 NOTICE = ("DecalogueX sends anonymous usage stats (never your code) to help improve it.\n"
           "Turn off any time: decaloguex telemetry off")
