@@ -218,8 +218,8 @@ DecalogueX also respects the markers other tools use, like `nosemgrep`,
 
 DecalogueX sends **anonymous usage stats** so it can be improved: things like
 how many files of each language were checked, which rules found problems, and
-which languages it couldn't read yet. A short notice tells you this the first
-time you run it, and nothing at all is sent on that first run.
+which languages it couldn't read yet. A short notice tells you this at the start
+of the first run, before anything is sent.
 
 - **Never sent:** your code, file or folder names, project names, secrets,
   error messages, or anything that identifies you.

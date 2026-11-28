@@ -115,6 +115,11 @@ def _run(screen: ui.Screen, target: Path, assume_yes: bool, dry_run: bool, ask: 
 
     # 1 and 2: start-up, then scan with a live progress bar.
     ui.show_start(screen)
+    # The one-time stats notice comes FIRST, before anything is sent, so the
+    # first run can be counted and people are still told beforehand.
+    notice = telemetry.take_notice()
+    if notice:
+        ui.show_notice(screen, notice)
     progress = ui.ScanProgress(screen)
     result = engine.scan(target, on_progress=progress.update)
     progress.finish(result.files_checked, result.seconds)
@@ -207,13 +212,10 @@ def add_required_protection(screen: ui.Screen, chosen: list, fixable: list) -> l
 
 
 def finish_scan(screen: ui.Screen, result, choice: str, chosen=(), applied=(), rejected=()) -> None:
-    """The last steps of every scan: send the usage stats, show the one-time
-    stats notice, and end with the early-access line."""
+    """The last steps of every scan: send the usage stats (the notice was
+    shown at the start), and end with the early-access line."""
     telemetry.send("scan_completed", telemetry.scan_stats(result, choice, chosen, applied, rejected),
                    root=result.root)
-    notice = telemetry.take_notice()
-    if notice:
-        ui.show_notice(screen, notice)
     ui.show_early_access(screen)
 
 
@@ -263,12 +265,12 @@ def run_json(target: Path, assume_yes: bool = False, show_all: bool = False) -> 
     # in the old cp1252 encoding, which other programs (and AI tools) can't read.
     print(json.dumps(report, indent=2, ensure_ascii=True))
 
+    notice = telemetry.take_notice()  # told first, then sent
+    if notice:
+        print(notice, file=sys.stderr)  # stderr, so it never breaks the JSON on stdout
     telemetry.send("scan_completed", telemetry.scan_stats(result, "yes" if assume_yes else "json",
                                                           fixable if assume_yes else (), applied, rejected),
                    root=result.root)
-    notice = telemetry.take_notice()
-    if notice:
-        print(notice, file=sys.stderr)  # stderr, so it never breaks the JSON on stdout
 
     remaining = len(result.findings) - len(applied)
     return 1 if remaining else 0

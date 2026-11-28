@@ -453,6 +453,42 @@ def test_nothing_is_sent_before_the_notice_has_been_shown(monkeypatch):
     assert sent[0]["properties"]["$geoip_disable"] is True  # and no location lookup
 
 
+def test_a_first_time_user_is_told_first_and_still_counted(tmp_path, monkeypatch, capsys):
+    # A beta tester ran DecalogueX once and never showed up in PostHog:
+    # the notice came at the END, after the send had been skipped. Now it
+    # comes at the start, so even a one-run user is told, then counted.
+    monkeypatch.delenv("DECALOGUEX_TELEMETRY")
+    monkeypatch.setenv("DECALOGUEX_POSTHOG_KEY", "phc_test")
+    sent = []
+    monkeypatch.setattr(telemetry, "_post", lambda payload: sent.append(payload))
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    cli.run_scan(tmp_path, dry_run=True, no_color=True, no_animation=True)
+    telemetry.finish()
+    assert "anonymous usage stats" in capsys.readouterr().out
+    assert len(sent) == 1
+
+    cli.run_scan(tmp_path, dry_run=True, no_color=True, no_animation=True)  # second run: no notice again
+    telemetry.finish()
+    assert "anonymous usage stats" not in capsys.readouterr().out
+    assert len(sent) == 2
+
+
+def test_json_mode_first_run_is_told_then_counted(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("DECALOGUEX_TELEMETRY")
+    monkeypatch.setenv("DECALOGUEX_POSTHOG_KEY", "phc_test")
+    sent = []
+    monkeypatch.setattr(telemetry, "_post", lambda payload: sent.append(payload))
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    cli.run_json(tmp_path)
+    telemetry.finish()
+    output = capsys.readouterr()
+    assert "anonymous usage stats" in output.err   # notice on stderr, JSON untouched
+    json.loads(output.out)
+    assert len(sent) == 1
+
+
 # ===========================================================================
 # 4. SPEED
 # ===========================================================================

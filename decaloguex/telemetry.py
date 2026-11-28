@@ -24,8 +24,9 @@ WHAT IS NEVER SENT
 
 THE RULES IT FOLLOWS
     * A short notice is shown ONCE, the first time DecalogueX runs.
-    * Nothing at all is sent until that notice has been shown, so the very
-      first run only tells people about the stats; it doesn't send any.
+    * Nothing at all is sent until that notice has been shown. It appears
+      at the START of the first run, so people are told before that run's
+      stats are sent (and first-time users are still counted).
     * Anyone can switch it off:  decaloguex telemetry off
     * It's also off when the DO_NOT_TRACK setting is on (a standard many
       developers use), or DECALOGUEX_TELEMETRY=off.
